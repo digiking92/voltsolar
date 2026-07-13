@@ -1,0 +1,6 @@
+{
+  "name": "VoltSolar",
+  "description": "A modern SaaS web application for solar system design, helping installers calculate loads, recommend inverter sizes, battery banks, and solar panels through an intelligent guided workflow.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
