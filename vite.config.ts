@@ -1,22 +1,92 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 
-export default defineConfig(() => {
+function contactApiPlugin(env: Record<string, string>): Plugin {
   return {
-    plugins: [react(), tailwindcss()],
+    name: 'voltsolar-contact-api',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        if (!req.url?.startsWith('/api/contact')) {
+          next();
+          return;
+        }
+
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204;
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+          res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+          res.end();
+          return;
+        }
+
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: 'Method not allowed.' }));
+          return;
+        }
+
+        try {
+          // Ensure server-side env is available for ZeptoMail
+          for (const [key, value] of Object.entries(env)) {
+            if (process.env[key] === undefined) process.env[key] = value;
+          }
+
+          const { readJsonBody, sendContactEmail, validateContactPayload } = await import(
+            './server/sendContactEmail'
+          );
+
+          const body = await readJsonBody(req);
+          if (body === null) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'Invalid JSON body.' }));
+            return;
+          }
+
+          const validated = validateContactPayload(body);
+          if (typeof validated === 'string') {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: validated }));
+            return;
+          }
+
+          await sendContactEmail(validated);
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ ok: true }));
+        } catch (err) {
+          console.error('Contact API (dev) error:', err);
+          const message =
+            err instanceof Error && err.message.includes('not configured')
+              ? err.message
+              : 'Could not send your message. Please try again or email us directly.';
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: message }));
+        }
+      });
+    }
+  };
+}
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+
+  return {
+    plugins: [react(), tailwindcss(), contactApiPlugin(env)],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
-      },
+        '@': path.resolve(__dirname, '.')
+      }
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
-    },
+      watch: process.env.DISABLE_HMR === 'true' ? null : {}
+    }
   };
 });

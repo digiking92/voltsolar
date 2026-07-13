@@ -33,6 +33,8 @@ export const ContactPage: React.FC<ContactPageProps> = ({
 }) => {
   const [intent, setIntent] = useState(initialIntent);
   const [submitted, setSubmitted] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const [form, setForm] = useState({
     fullName: '',
     company: '',
@@ -42,13 +44,46 @@ export const ContactPage: React.FC<ContactPageProps> = ({
     budget: ''
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.fullName.trim() || !form.email.trim() || !intent || !form.summary.trim()) {
-      alert('Please complete name, email, inquiry type, and project summary.');
+      setSubmitError('Please complete name, email, inquiry type, and project summary.');
       return;
     }
-    setSubmitted(true);
+
+    setIsSending(true);
+    setSubmitError('');
+
+    try {
+      const response = await fetch('/api/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: form.fullName.trim(),
+          company: form.company.trim(),
+          email: form.email.trim(),
+          phone: form.phone.trim(),
+          intent,
+          summary: form.summary.trim(),
+          budget: form.budget.trim()
+        })
+      });
+
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        throw new Error(data.error || 'Could not send your message. Please try again.');
+      }
+
+      setSubmitted(true);
+    } catch (err) {
+      setSubmitError(
+        err instanceof Error
+          ? err.message
+          : 'Could not send your message. Please try again or email frohitedigitals@gmail.com.'
+      );
+    } finally {
+      setIsSending(false);
+    }
   };
 
   return (
@@ -230,11 +265,18 @@ export const ContactPage: React.FC<ContactPageProps> = ({
                 />
               </div>
 
+              {submitError ? (
+                <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-3.5 py-2.5">
+                  {submitError}
+                </p>
+              ) : null}
+
               <button
                 type="submit"
-                className="w-full sm:w-auto px-8 py-3.5 bg-[#156DB7] hover:bg-[#0F5288] text-white font-semibold rounded-xl shadow-sm transition-all"
+                disabled={isSending}
+                className="w-full sm:w-auto px-8 py-3.5 bg-[#156DB7] hover:bg-[#0F5288] disabled:opacity-60 text-white font-semibold rounded-xl shadow-sm transition-all"
               >
-                Send message
+                {isSending ? 'Sending…' : 'Send message'}
               </button>
 
               <p className="text-xs text-slate-500 leading-relaxed">
@@ -247,7 +289,13 @@ export const ContactPage: React.FC<ContactPageProps> = ({
           <div className="mt-10 p-6 rounded-2xl border border-slate-200 bg-slate-50">
             <h3 className="font-bold text-slate-900 mb-2">Prefer to reach us directly?</h3>
             <p className="text-sm text-slate-600">
-              Email: <span className="font-semibold text-slate-800">hello@voltsolar.com</span>
+              Email:{' '}
+              <a
+                href="mailto:frohitedigitals@gmail.com"
+                className="font-semibold text-[#156DB7] hover:underline"
+              >
+                frohitedigitals@gmail.com
+              </a>
             </p>
             <p className="text-sm text-slate-600 mt-1">Hours: Mon-Fri, 09:00-17:00 (local)</p>
             <p className="text-xs text-slate-500 mt-3">
