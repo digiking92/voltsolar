@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   User, Building, Phone, Mail, MapPin, Sparkles, Plus, Minus, Search, 
   Trash2, ArrowLeft, ArrowRight, Zap, Battery, Sun, Cpu, ShieldCheck, 
-  Info, Edit, Printer, AlertTriangle
+  Info, Edit, Printer, AlertTriangle, Download
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { DEFAULT_APPLIANCES } from '../../data/appliances';
 import { runFullDesignCalculations } from '../../lib/calculations';
+import { exportReportPdf } from '../../lib/exportReportPdf';
 import { Project, ProjectAppliance, BatteryType, SystemVoltage, InverterType, Calculations } from '../../types';
 import { EngineeringReport } from './EngineeringReport';
 
@@ -49,6 +50,8 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
   // Step 7: Solar Panels
   const [panelSize, setPanelSize] = useState<number>(550);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const reportRef = useRef<HTMLDivElement>(null);
 
   const reportIssuedAt = useMemo(() => new Date(), []);
   const designId = useMemo(() => {
@@ -247,6 +250,20 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       addProject(projectData);
     }
     onClose();
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!reportRef.current || isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    try {
+      const name = (projectName || 'engineering-report').trim();
+      await exportReportPdf(reportRef.current, `${name}-VoltSolar-Report`);
+    } catch (err) {
+      console.error('PDF export failed:', err);
+      window.alert('Could not download the PDF. Please try again or use Print.');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
 
   return (
@@ -983,9 +1000,19 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
               <div className="space-y-1">
                 <span className="text-[10px] font-bold text-[#156DB7] uppercase tracking-wider">Project Review Stage</span>
                 <h3 className="text-sm font-bold text-slate-800">Sizing Specification Proposal Document</h3>
-                <p className="text-xs text-slate-500">Review all parameters before saving. You can also print this spec sheet for your client.</p>
+                <p className="text-xs text-slate-500">Review all parameters before saving. Download a PDF or print this report for your client.</p>
               </div>
               <div className="flex items-center gap-3">
+                <button
+                  id="wiz-pdf-btn"
+                  type="button"
+                  onClick={() => void handleDownloadPdf()}
+                  disabled={isDownloadingPdf}
+                  className="inline-flex items-center space-x-2 px-4 py-2 border border-[#156DB7]/30 bg-[#156DB7] hover:bg-[#0F5288] disabled:opacity-60 text-white rounded-xl font-semibold text-xs transition-colors shadow-sm"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>{isDownloadingPdf ? 'Preparing PDF…' : 'Download PDF'}</span>
+                </button>
                 <button
                   id="wiz-print-btn"
                   onClick={() => window.print()}
@@ -1005,6 +1032,7 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
               </div>
             </div>
 
+            <div ref={reportRef} id="engineering-report">
             <EngineeringReport
               calcs={activeCalcs}
               projectName={projectName}
@@ -1023,6 +1051,7 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
               issuedAt={reportIssuedAt}
               onEditStep={setCurrentStep}
             />
+            </div>
 
             {/* Save Actions and start new buttons */}
             <div className="flex flex-col sm:flex-row gap-4 justify-end print:hidden">

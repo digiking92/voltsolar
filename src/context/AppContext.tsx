@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Project, UserProfile, BatteryType, SystemVoltage, InverterType } from '../types';
+import { Project, UserProfile } from '../types';
 import { supabase, supabaseApi } from '../lib/supabase';
 
 interface AppContextType {
@@ -19,83 +19,6 @@ interface AppContextType {
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
-
-const getDemoProjects = (userId: string): Project[] => [
-  {
-    id: 'demo-1',
-    userId,
-    projectName: 'Greenhouse Off-Grid',
-    clientName: 'Sarah Jenkins',
-    phone: '+1 (555) 019-2834',
-    email: 'sarah.j@example.com',
-    location: 'Austin, TX',
-    projectType: 'residential',
-    backupHours: 12,
-    batteryType: 'lithium',
-    systemVoltage: '48V',
-    inverterType: 'hybrid',
-    panelSize: 550,
-    createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-    appliances: [
-      { id: 'a1', projectId: 'demo-1', category: 'Lighting', applianceName: 'LED Bulb', customWattage: 10, quantity: 15, hoursUsed: 6 },
-      { id: 'a2', projectId: 'demo-1', category: 'Kitchen', applianceName: 'Refrigerator', customWattage: 220, quantity: 1, hoursUsed: 24 },
-      { id: 'a3', projectId: 'demo-1', category: 'Heavy Loads', applianceName: 'Water Pump', customWattage: 750, quantity: 1, hoursUsed: 2 }
-    ],
-    calculations: {
-      connectedLoad: 1120,
-      peakLoad: 3170,
-      dailyEnergy: 7680,
-      monthlyEnergy: 230.4,
-      batteryCapacityKwh: 10.24,
-      batteryCapacityAh: 213,
-      batteryQuantity: 2,
-      batteryConfiguration: '1 Series × 2 Parallel (2 total batteries)',
-      inverterSizeKva: 5.0,
-      inverterReason: 'Recommended a 5.0 kVA inverter to comfortably handle continuous connected loads of 1.12 kW and peak start surges of 3.17 kW.',
-      solarArrayKw: 3.3,
-      panelQuantity: 6,
-      panelConfiguration: '3 Series × 2 Parallel (6 Panels × 550W)',
-      estimatedDailyProductionKwh: 12.18
-    }
-  },
-  {
-    id: 'demo-2',
-    userId,
-    projectName: 'Miller Smart Home',
-    clientName: 'David Miller',
-    phone: '+1 (555) 014-9922',
-    email: 'david@millerhomes.com',
-    location: 'Los Angeles, CA',
-    projectType: 'residential',
-    backupHours: 6,
-    batteryType: 'gel',
-    systemVoltage: '24V',
-    inverterType: 'hybrid',
-    panelSize: 450,
-    createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-    appliances: [
-      { id: 'b1', projectId: 'demo-2', category: 'Lighting', applianceName: 'LED Bulb', customWattage: 10, quantity: 25, hoursUsed: 5 },
-      { id: 'b2', projectId: 'demo-2', category: 'Living Room', applianceName: 'Television', customWattage: 100, quantity: 2, hoursUsed: 4 },
-      { id: 'b3', projectId: 'demo-2', category: 'Office', applianceName: 'Desktop Computer', customWattage: 200, quantity: 1, hoursUsed: 8 }
-    ],
-    calculations: {
-      connectedLoad: 650,
-      peakLoad: 990,
-      dailyEnergy: 3650,
-      monthlyEnergy: 109.5,
-      batteryCapacityKwh: 4.38,
-      batteryCapacityAh: 182,
-      batteryQuantity: 2,
-      batteryConfiguration: '2 Series × 1 Parallel (2 total batteries)',
-      inverterSizeKva: 1.5,
-      inverterReason: 'Recommended a 1.5 kVA inverter to handle continuous connected load of 0.65 kW and support startups.',
-      solarArrayKw: 1.8,
-      panelQuantity: 4,
-      panelConfiguration: '2 Series × 2 Parallel (4 Panels × 450W)',
-      estimatedDailyProductionKwh: 6.64
-    }
-  }
-];
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -269,14 +192,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           setCurrentUser(newUser);
           localStorage.setItem('voltsolar_user', JSON.stringify(newUser));
-
-          // Seed demo projects in Supabase for the new user
-          const demoProjects = getDemoProjects(newUser.id);
-          setProjects(demoProjects);
-          localStorage.setItem('voltsolar_projects', JSON.stringify(demoProjects));
-          for (const proj of demoProjects) {
-            await supabaseApi.saveProject(proj);
-          }
+          setProjects([]);
+          localStorage.setItem('voltsolar_projects', JSON.stringify([]));
           return true;
         }
       }
@@ -298,13 +215,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setCurrentUser(mockUser);
       localStorage.setItem('voltsolar_user', JSON.stringify(mockUser));
-
-      const demoProjects = getDemoProjects(mockUser.id);
-      setProjects(demoProjects);
-      localStorage.setItem('voltsolar_projects', JSON.stringify(demoProjects));
-      for (const proj of demoProjects) {
-        await supabaseApi.saveProject(proj);
-      }
+      setProjects([]);
+      localStorage.setItem('voltsolar_projects', JSON.stringify([]));
       return true;
     }
     return false;

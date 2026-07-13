@@ -1,4 +1,4 @@
-import { Calculations, BatteryType, SystemVoltage, InverterType } from '../../types';
+﻿import { Calculations, BatteryType, SystemVoltage, InverterType } from '../../types';
 import { SYSTEM_STANDARDS, COPPER_CABLE_SPECS } from './engineeringStandards';
 
 export const SOFTWARE_VERSION = '1.0.0';
@@ -229,7 +229,7 @@ export function getCableEngineeringRows(calcs: Calculations): {
   const rows = [
     {
       path: 'PV Array → Inverter (DC)',
-      specification: calcs.cableSizing?.pvCableSize || '—',
+      specification: calcs.cableSizing?.pvCableSize || '-',
       requiredCurrentA: pvCurrent,
       cableRatingA: calcs.cableSizing?.pvCableAmpacityA || cableAmpacityFromSizeString(calcs.cableSizing?.pvCableSize),
       voltageDropPercent: calcs.cableSizing?.pvCableVoltageDropPercent || 0,
@@ -237,7 +237,7 @@ export function getCableEngineeringRows(calcs: Calculations): {
     },
     {
       path: 'Battery Bank → Inverter (DC)',
-      specification: calcs.cableSizing?.batteryCableSize || '—',
+      specification: calcs.cableSizing?.batteryCableSize || '-',
       requiredCurrentA: battCurrent,
       cableRatingA:
         calcs.cableSizing?.batteryCableAmpacityA ||
@@ -247,7 +247,7 @@ export function getCableEngineeringRows(calcs: Calculations): {
     },
     {
       path: 'Inverter → Distribution Board (AC)',
-      specification: calcs.cableSizing?.acCableSize || '—',
+      specification: calcs.cableSizing?.acCableSize || '-',
       requiredCurrentA: acCurrent,
       cableRatingA: calcs.cableSizing?.acCableAmpacityA || cableAmpacityFromSizeString(calcs.cableSizing?.acCableSize),
       voltageDropPercent: calcs.cableSizing?.acCableVoltageDropPercent || 0,

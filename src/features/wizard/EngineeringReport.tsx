@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import {
   User, Zap, Battery, Sun, Cpu, ShieldCheck, AlertTriangle, Info, Edit, CheckCircle2
 } from 'lucide-react';
@@ -368,7 +368,7 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           <ReasonBlock
             title="Expected Backup"
             value={`${(calcs.batteryExpectedBackupHours || backupHours).toFixed(1)} Hours`}
-            reason="Estimated from usable energy after inverter conversion efficiency, based on the customer's average load profile—not a guaranteed continuous full-load runtime."
+            reason="Estimated from usable energy after inverter conversion efficiency, based on the customer's average load profile, not a guaranteed continuous full-load runtime."
           />
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-xs">
@@ -520,7 +520,7 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
                 <td className="px-4 py-3 font-semibold">String Vmp (Operating Window)</td>
                 <td className="px-4 py-3 font-mono">{calcs.stringVmpHot ?? calcs.stringVmpMax} V</td>
                 <td className="px-4 py-3 font-mono">
-                  {calcs.mpptVmpMin}–{calcs.mpptVmpMax} V
+                  {calcs.mpptVmpMin}-{calcs.mpptVmpMax} V
                 </td>
                 <td className="px-4 py-3 font-mono text-slate-500">Within window</td>
                 <td className="px-4 py-3"><StatusBadge status="PASS" /></td>
@@ -543,7 +543,7 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           </table>
         </div>
         <p className="text-[11px] text-slate-500 mt-3">
-          Layout: {calcs.seriesCount ?? '—'} series × {calcs.parallelCount ?? '—'} parallel ({calcs.panelQuantity} panels).
+          Layout: {calcs.seriesCount ?? '-'} series × {calcs.parallelCount ?? '-'} parallel ({calcs.panelQuantity} panels).
           Only electrically valid configurations are published.
         </p>
       </div>
@@ -585,19 +585,19 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
                 <tr key={idx}>
                   <td className="px-4 py-3 text-slate-800 font-bold">{device.device}</td>
                   <td className="px-4 py-3 font-mono">
-                    {device.calculatedCurrentA > 0 ? `${device.calculatedCurrentA.toFixed(1)} A` : '—'}
+                    {device.calculatedCurrentA > 0 ? `${device.calculatedCurrentA.toFixed(1)} A` : '-'}
                   </td>
                   <td className="px-4 py-3 font-mono">
                     {(device.requiredCurrentA ?? 0) > 0
                       ? `${(device.requiredCurrentA ?? 0).toFixed(1)} A`
-                      : '—'}
+                      : '-'}
                   </td>
                   <td className="px-4 py-3 font-mono">{device.safetyFactor}×</td>
                   <td className="px-4 py-3 font-bold text-[#156DB7]">
-                    {device.nearestStandardRating || '—'}
+                    {device.nearestStandardRating || '-'}
                   </td>
                   <td className="px-4 py-3 font-semibold">{device.selectedRating}</td>
-                  <td className="px-4 py-3 text-[10px] font-mono text-slate-400">{device.codeStandard || '—'}</td>
+                  <td className="px-4 py-3 text-[10px] font-mono text-slate-400">{device.codeStandard || '-'}</td>
                   <td className="px-4 py-3 text-[11px] text-slate-500 leading-relaxed max-w-xs">
                     {device.justification}
                   </td>
