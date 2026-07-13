@@ -26,7 +26,7 @@ export function sizeSolarArray(
   const tempLoss = SYSTEM_STANDARDS.temperatureDeratingFactor; // e.g., 0.10 (10% loss)
   const dustLoss = SYSTEM_STANDARDS.dustLossFactor;            // e.g., 0.05 (5% loss)
   const cableLoss = SYSTEM_STANDARDS.cableLossFactor;          // e.g., 0.02 (2% loss)
-  const inverterEff = SYSTEM_STANDARDS.inverterEfficiency;      // 0.93
+  const inverterEff = SYSTEM_STANDARDS.inverterEfficiencyFallback;
   const batterySpecs = BATTERY_CHEM_STANDARDS[batteryType] || BATTERY_CHEM_STANDARDS.lithium;
   const batteryEff = batterySpecs.efficiency;                   // e.g., 0.95 for Lithium
 

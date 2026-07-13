@@ -1,9 +1,29 @@
-import { getPanelFromDb, getInverterFromDb } from './equipmentDatabase';
+import { PanelSpecs, InverterSpecs } from './equipmentDatabase';
+import { SYSTEM_STANDARDS } from './engineeringStandards';
 
-export interface PanelConfigurationResult {
+export interface StringValidationResult {
+  valid: boolean;
+  failures: string[];
   seriesCount: number;
   parallelCount: number;
   totalPanels: number;
+  totalPvPowerW: number;
+  vocColdPerPanel: number;
+  vmpHotPerPanel: number;
+  stringVocMax: number;
+  stringVmpHot: number;
+  stringVmpNominal: number;
+  stringIscMax: number;
+  stringImpMax: number;
+  currentPerMppt: number;
+  powerPerMppt: number;
+  stringsPerMppt: number;
+  maxPanelsInSeries: number;
+  minPanelsInSeries: number;
+  maxParallelStrings: number;
+}
+
+export interface PanelConfigurationResult extends StringValidationResult {
   panelConfiguration: string;
   panelVoc: number;
   panelVmp: number;
@@ -11,163 +31,184 @@ export interface PanelConfigurationResult {
   panelImp: number;
   panelModelUsed: string;
   inverterModelUsed: string;
-  stringVocMax: number; // Max Voc at -10C
-  stringVmpMax: number; // Vmp at +65C (minimum)
-  stringVmpNominal: number; // Standard Vmp at STC
-  stringIscMax: number;
   mpptVocLimit: number;
   mpptVmpMin: number;
   mpptVmpMax: number;
   maxPvCurrent: number;
   maxPvPower: number;
-  totalPvPowerW: number;
-  maxPanelsInSeries: number;
-  minPanelsInSeries: number;
   panelSizingCompatibilityOk: boolean;
   panelSizingCompatibilityWarning: string;
+  score: number;
 }
 
-export function configureSolarStrings(
-  requestedPanelQuantity: number,
-  panelWattage: number,
-  inverterSizeKva: number,
-  systemVoltageNum: number
-): PanelConfigurationResult {
-  // 1. Retrieve specifications from equipment database
-  const panel = getPanelFromDb(panelWattage);
-  const inverter = getInverterFromDb(inverterSizeKva, systemVoltageNum);
+function temperatureAdjustedVoc(panel: PanelSpecs): number {
+  const { minDesignTempC, stcTempC } = SYSTEM_STANDARDS;
+  return panel.voc * (1 + (panel.tempCoeffVoc * (minDesignTempC - stcTempC)) / 100);
+}
 
-  // Temperature Coefficients and Design Limits
-  // standard panel Voc temp coefficient is typically -0.30% to -0.34% per deg C
-  const tempCoeff = panel.tempCoeffVoc; // e.g. -0.34
-  const minDesignTemp = -10; // C
-  const maxCellTemp = 65; // C
+function temperatureAdjustedVmpHot(panel: PanelSpecs): number {
+  const { maxCellTempC, stcTempC } = SYSTEM_STANDARDS;
+  return panel.vmp * (1 + (panel.tempCoeffVoc * (maxCellTempC - stcTempC)) / 100);
+}
 
-  // Voc rise at minimum temperature (-10C)
-  const vocTempFactor = 1 + (tempCoeff * (minDesignTemp - 25)) / 100; // Voc increases under cold temperature
-  const vocCold = panel.voc * vocTempFactor;
+/**
+ * Hard electrical validation for one S×P layout.
+ * Invalid layouts are never returned as recommendations.
+ */
+export function validateStringConfiguration(
+  panel: PanelSpecs,
+  inverter: InverterSpecs,
+  seriesCount: number,
+  parallelCount: number
+): StringValidationResult {
+  const failures: string[] = [];
+  const vocCold = temperatureAdjustedVoc(panel);
+  const vmpHot = temperatureAdjustedVmpHot(panel);
 
-  // Vmp drop at maximum cell temperature (65C)
-  const vmpTempFactor = 1 + (tempCoeff * (maxCellTemp - 25)) / 100; // Vmp decreases under high temperature
-  const vmpHot = panel.vmp * vmpTempFactor;
-
-  // --- Calculate Max and Min Panels in Series ---
-  // Max series = floor ( Maximum Inverter PV Voltage / Voc_cold )
-  // Min series = ceil ( Minimum MPPT Voltage / Vmp_hot )
   const maxPanelsInSeries = Math.floor(inverter.mpptVocLimit / vocCold);
   const minPanelsInSeries = Math.ceil(inverter.mpptVmpMin / vmpHot);
+  const maxParallelStrings = inverter.numMppts * inverter.maxStringsPerMppt;
 
-  // --- Determine optimal string layout ---
-  let seriesCount = 1;
-  let parallelCount = 1;
-  let finalPanelQuantity = requestedPanelQuantity;
-  let compatibilityOk = true;
-  let warningMsg = '';
+  const totalPanels = seriesCount * parallelCount;
+  const totalPvPowerW = totalPanels * panel.sizeW;
+  const stringVocMax = seriesCount * vocCold;
+  const stringVmpHot = seriesCount * vmpHot;
+  const stringVmpNominal = seriesCount * panel.vmp;
+  const stringIscMax = parallelCount * panel.isc;
+  const stringImpMax = parallelCount * panel.imp;
 
-  // Ensure minimum series count is valid
-  const targetSeries = Math.max(1, Math.min(maxPanelsInSeries, Math.round((inverter.mpptVmpMin + inverter.mpptVmpMax) / 2 / panel.vmp)));
-  seriesCount = targetSeries;
+  const stringsPerMppt = Math.ceil(parallelCount / inverter.numMppts);
+  // Operating current vs MPPT rating uses Imp; Isc is used for protection/cable later
+  const currentPerMppt = stringsPerMppt * panel.imp;
+  const powerPerMppt = seriesCount * stringsPerMppt * panel.sizeW;
 
-  // We want to find series (S) and parallel (P) counts such that S is in [minPanelsInSeries, maxPanelsInSeries]
-  // and S * P is close to requestedPanelQuantity, and layout is electrically valid
-  let bestS = -1;
-  let bestP = -1;
-  let bestDiff = Infinity;
+  if (seriesCount < 1 || parallelCount < 1) {
+    failures.push('Series and parallel counts must be at least 1.');
+  }
+  if (stringVocMax > inverter.mpptVocLimit) {
+    failures.push(
+      `Cold-weather string Voc ${stringVocMax.toFixed(1)}V exceeds inverter max PV voltage ${inverter.mpptVocLimit}V.`
+    );
+  }
+  if (stringVocMax > panel.maxSystemVoltageV) {
+    failures.push(
+      `String Voc ${stringVocMax.toFixed(1)}V exceeds panel max system voltage ${panel.maxSystemVoltageV}V.`
+    );
+  }
+  if (stringVmpHot < inverter.mpptVmpMin) {
+    failures.push(
+      `Hot-weather string Vmp ${stringVmpHot.toFixed(1)}V is below MPPT minimum ${inverter.mpptVmpMin}V.`
+    );
+  }
+  if (stringVmpNominal > inverter.mpptVmpMax) {
+    failures.push(
+      `String Vmp ${stringVmpNominal.toFixed(1)}V exceeds MPPT maximum ${inverter.mpptVmpMax}V.`
+    );
+  }
+  if (currentPerMppt > inverter.maxPvCurrent) {
+    failures.push(
+      `MPPT operating current ${currentPerMppt.toFixed(1)}A exceeds inverter MPPT limit ${inverter.maxPvCurrent}A.`
+    );
+  }
+  if (stringsPerMppt > inverter.maxStringsPerMppt) {
+    failures.push(
+      `${stringsPerMppt} strings per MPPT exceeds inverter limit of ${inverter.maxStringsPerMppt}.`
+    );
+  }
+  if (parallelCount > maxParallelStrings) {
+    failures.push(
+      `${parallelCount} parallel strings exceeds inverter capacity of ${maxParallelStrings} total strings.`
+    );
+  }
+  if (totalPvPowerW > inverter.maxPvPower) {
+    failures.push(
+      `Array power ${totalPvPowerW}W exceeds inverter max PV input ${inverter.maxPvPower}W.`
+    );
+  }
+  if (seriesCount > maxPanelsInSeries || seriesCount < minPanelsInSeries) {
+    failures.push(
+      `Series count ${seriesCount} outside valid window [${minPanelsInSeries}, ${maxPanelsInSeries}].`
+    );
+  }
 
-  // Let's search over potential layouts
-  for (let s = Math.max(1, minPanelsInSeries); s <= maxPanelsInSeries; s++) {
-    // Parallel strings must respect max current
-    // P * panel.isc <= inverter.maxPvCurrent
-    const maxP = Math.floor(inverter.maxPvCurrent / panel.isc) || 1;
+  return {
+    valid: failures.length === 0,
+    failures,
+    seriesCount,
+    parallelCount,
+    totalPanels,
+    totalPvPowerW,
+    vocColdPerPanel: vocCold,
+    vmpHotPerPanel: vmpHot,
+    stringVocMax: parseFloat(stringVocMax.toFixed(1)),
+    stringVmpHot: parseFloat(stringVmpHot.toFixed(1)),
+    stringVmpNominal: parseFloat(stringVmpNominal.toFixed(1)),
+    stringIscMax: parseFloat(stringIscMax.toFixed(1)),
+    stringImpMax: parseFloat(stringImpMax.toFixed(1)),
+    currentPerMppt: parseFloat(currentPerMppt.toFixed(1)),
+    powerPerMppt: parseFloat(powerPerMppt.toFixed(1)),
+    stringsPerMppt,
+    maxPanelsInSeries,
+    minPanelsInSeries,
+    maxParallelStrings
+  };
+}
+
+/**
+ * Search only electrically valid S×P layouts for a panel/inverter pair.
+ * Prefer layouts that meet or slightly exceed the PV energy target.
+ */
+export function searchValidStringConfigurations(
+  panel: PanelSpecs,
+  inverter: InverterSpecs,
+  targetPvWatts: number,
+  preferredWattageMatch: boolean
+): PanelConfigurationResult[] {
+  const vocCold = temperatureAdjustedVoc(panel);
+  const vmpHot = temperatureAdjustedVmpHot(panel);
+  const maxS = Math.floor(inverter.mpptVocLimit / vocCold);
+  const minS = Math.ceil(inverter.mpptVmpMin / vmpHot);
+  if (maxS < 1 || minS > maxS) return [];
+
+  const maxP = inverter.numMppts * inverter.maxStringsPerMppt;
+  const results: PanelConfigurationResult[] = [];
+
+  for (let s = minS; s <= maxS; s++) {
     for (let p = 1; p <= maxP; p++) {
-      const currentQty = s * p;
-      const power = currentQty * panel.sizeW;
-      
-      // Must respect max inverter input power
-      if (power <= inverter.maxPvPower) {
-        const diff = Math.abs(currentQty - requestedPanelQuantity);
-        if (diff < bestDiff) {
-          bestDiff = diff;
-          bestS = s;
-          bestP = p;
-        }
-      }
+      const checked = validateStringConfiguration(panel, inverter, s, p);
+      if (!checked.valid) continue;
+
+      const sizingRatio = checked.totalPvPowerW / Math.max(targetPvWatts, 1);
+      let score = 50;
+      if (preferredWattageMatch) score += 200;
+      if (sizingRatio >= 1.0 && sizingRatio <= 1.25) score += 150;
+      else if (sizingRatio > 1.25) score += Math.max(0, 100 - (sizingRatio - 1.25) * 80);
+      else score += Math.max(0, sizingRatio * 80);
+
+      // Prefer balanced MPPT loading
+      if (p % inverter.numMppts === 0) score += 25;
+
+      results.push({
+        ...checked,
+        panelConfiguration: `${s} Series × ${p} Parallel (${checked.totalPanels} Panels total)`,
+        panelVoc: panel.voc,
+        panelVmp: panel.vmp,
+        panelIsc: panel.isc,
+        panelImp: panel.imp,
+        panelModelUsed: `${panel.brand} ${panel.model}`,
+        inverterModelUsed: `${inverter.brand} ${inverter.model}`,
+        mpptVocLimit: inverter.mpptVocLimit,
+        mpptVmpMin: inverter.mpptVmpMin,
+        mpptVmpMax: inverter.mpptVmpMax,
+        maxPvCurrent: inverter.maxPvCurrent,
+        maxPvPower: inverter.maxPvPower,
+        panelSizingCompatibilityOk: true,
+        panelSizingCompatibilityWarning:
+          'Selected PV array configuration is fully compatible with inverter MPPT specifications.',
+        score
+      });
     }
   }
 
-  if (bestS !== -1 && bestP !== -1) {
-    seriesCount = bestS;
-    parallelCount = bestP;
-    finalPanelQuantity = seriesCount * parallelCount;
-  } else {
-    // Heuristics fallback if no strict matching layout found
-    seriesCount = Math.max(1, minPanelsInSeries);
-    parallelCount = Math.max(1, Math.floor(requestedPanelQuantity / seriesCount));
-    finalPanelQuantity = seriesCount * parallelCount;
-  }
-
-  // Electrical Characteristics of Final Array
-  const totalPvPowerW = finalPanelQuantity * panel.sizeW;
-  const stringVocMax = parseFloat((seriesCount * vocCold).toFixed(1)); // String Voc at -10C
-  const stringVmpMax = parseFloat((seriesCount * panel.vmp).toFixed(1)); // STC
-  const stringVmpHotMin = parseFloat((seriesCount * vmpHot).toFixed(1)); // Vmp at +65C
-  const stringIscMax = parseFloat((parallelCount * panel.isc).toFixed(1));
-
-  // --- Verification ---
-  // 1. String Voc < Maximum Inverter PV Voltage (Voc Limit)
-  if (stringVocMax > inverter.mpptVocLimit) {
-    compatibilityOk = false;
-    warningMsg += `DANGER: String Voc (${stringVocMax}V) exceeds maximum inverter PV voltage (${inverter.mpptVocLimit}V). This will physically destroy the inverter under cold bright conditions. `;
-  }
-
-  // 2. String Vmp Within MPPT Operating Range
-  if (stringVmpHotMin < inverter.mpptVmpMin) {
-    compatibilityOk = false;
-    warningMsg += `WARNING: String Vmp at +65°C (${stringVmpHotMin}V) falls below inverter minimum MPPT threshold (${inverter.mpptVmpMin}V). MPPT tracking will fail in hot weather. `;
-  }
-  if (stringVmpMax > inverter.mpptVmpMax) {
-    compatibilityOk = false;
-    warningMsg += `WARNING: String Vmp (${stringVmpMax}V) exceeds inverter maximum MPPT voltage limit (${inverter.mpptVmpMax}V). Power clipping will occur. `;
-  }
-
-  // 3. Array Current < Maximum MPPT Current
-  if (stringIscMax > inverter.maxPvCurrent) {
-    compatibilityOk = false;
-    warningMsg += `WARNING: Array current (${stringIscMax}A) exceeds maximum inverter MPPT input current (${inverter.maxPvCurrent}A). Overcurrent clipping or heat damage may occur. `;
-  }
-
-  // 4. PV Power < Maximum PV Input Power
-  if (totalPvPowerW > inverter.maxPvPower) {
-    compatibilityOk = false;
-    warningMsg += `WARNING: Total PV Power (${totalPvPowerW}W) exceeds maximum inverter input power limit (${inverter.maxPvPower}W). Excessive solar clipping will occur. `;
-  }
-
-  const configString = `${seriesCount} Series × ${parallelCount} Parallel (${finalPanelQuantity} Panels total)`;
-
-  return {
-    seriesCount,
-    parallelCount,
-    totalPanels: finalPanelQuantity,
-    panelConfiguration: configString,
-    panelVoc: panel.voc,
-    panelVmp: panel.vmp,
-    panelIsc: panel.isc,
-    panelImp: panel.imp,
-    panelModelUsed: `${panel.brand} ${panel.model}`,
-    inverterModelUsed: `${inverter.brand} ${inverter.model}`,
-    stringVocMax,
-    stringVmpMax,
-    stringVmpNominal: parseFloat((seriesCount * panel.vmp).toFixed(1)),
-    stringIscMax,
-    mpptVocLimit: inverter.mpptVocLimit,
-    mpptVmpMin: inverter.mpptVmpMin,
-    mpptVmpMax: inverter.mpptVmpMax,
-    maxPvCurrent: inverter.maxPvCurrent,
-    maxPvPower: inverter.maxPvPower,
-    totalPvPowerW,
-    maxPanelsInSeries,
-    minPanelsInSeries,
-    panelSizingCompatibilityOk: compatibilityOk,
-    panelSizingCompatibilityWarning: warningMsg || 'Selected PV Array configuration is fully compatible with inverter MPPT specifications.'
-  };
+  return results.sort((a, b) => b.score - a.score);
 }

@@ -1,74 +1,152 @@
 import { InverterType } from '../../types';
+import { InverterSpecs, getInvertersForVoltage } from './equipmentDatabase';
 import { SYSTEM_STANDARDS } from './engineeringStandards';
 
-export interface InverterCalculationResult {
-  inverterSizeKva: number;             // selected rating in kVA
-  inverterMinimumSizeKva: number;      // raw minimum required size
-  inverterPreferredSizeKva: number;    // ideal size with reserves
-  inverterModelRecommended: string;    // suggested commercial product model name
-  inverterReason: string;              // transparent selection explanation
+export interface InverterValidationResult {
+  valid: boolean;
+  failures: string[];
+  continuousLoadOk: boolean;
+  peakLoadOk: boolean;
+  batteryVoltageOk: boolean;
+  batteryCurrentOk: boolean;
 }
 
-export function sizeInverter(
+export interface RankedInverter {
+  inverter: InverterSpecs;
+  minimumSizeKva: number;
+  preferredSizeKva: number;
+  validation: InverterValidationResult;
+  score: number;
+  reason: string;
+}
+
+export function calculateInverterSizingTargets(
+  connectedLoadW: number,
+  peakLoadW: number
+): { minimumSizeKva: number; preferredSizeKva: number } {
+  const minimumSizeKva = (connectedLoadW * SYSTEM_STANDARDS.inverterSafetyFactor) / 1000;
+  const surgeKva = peakLoadW / 1000;
+  const preferredSizeKva = Math.max(minimumSizeKva, surgeKva / 2.0);
+  return {
+    minimumSizeKva: parseFloat(minimumSizeKva.toFixed(2)),
+    preferredSizeKva: parseFloat(preferredSizeKva.toFixed(2))
+  };
+}
+
+/**
+ * Hard validation: an inverter that fails ANY check is rejected.
+ */
+export function validateInverterAgainstLoads(
+  inverter: InverterSpecs,
+  systemVoltage: number,
+  connectedLoadW: number,
+  peakLoadW: number,
+  batteryInverterDrawA: number
+): InverterValidationResult {
+  const failures: string[] = [];
+
+  const continuousLoadOk = inverter.sizeKva * 1000 >= connectedLoadW;
+  if (!continuousLoadOk) {
+    failures.push(
+      `Continuous load ${(connectedLoadW / 1000).toFixed(2)} kW exceeds inverter rating ${inverter.sizeKva} kVA.`
+    );
+  }
+
+  const surgeCapacityW = inverter.sizeKva * 1000 * inverter.surgeFactor;
+  const peakLoadOk = surgeCapacityW >= peakLoadW;
+  if (!peakLoadOk) {
+    failures.push(
+      `Peak/surge load ${(peakLoadW / 1000).toFixed(2)} kW exceeds inverter surge capacity ${(surgeCapacityW / 1000).toFixed(2)} kW.`
+    );
+  }
+
+  const batteryVoltageOk = inverter.voltageV === systemVoltage;
+  if (!batteryVoltageOk) {
+    failures.push(
+      `Inverter DC voltage ${inverter.voltageV}V does not match system voltage ${systemVoltage}V.`
+    );
+  }
+
+  const batteryCurrentOk = batteryInverterDrawA <= inverter.maxBatteryDischargeCurrentA;
+  if (!batteryCurrentOk) {
+    failures.push(
+      `Required battery discharge ${batteryInverterDrawA.toFixed(1)}A exceeds inverter battery current limit ${inverter.maxBatteryDischargeCurrentA}A.`
+    );
+  }
+
+  // Preferred continuous margin (soft preference encoded as hard reject only if below continuous)
+  const withSafety = connectedLoadW * SYSTEM_STANDARDS.inverterSafetyFactor;
+  if (inverter.sizeKva * 1000 < withSafety && continuousLoadOk) {
+    // Narrow margin — still valid electrically, but scored lower later
+  }
+
+  return {
+    valid: failures.length === 0,
+    failures,
+    continuousLoadOk,
+    peakLoadOk,
+    batteryVoltageOk,
+    batteryCurrentOk
+  };
+}
+
+/**
+ * Rank catalog inverters that PASS validation. Never returns a failing inverter.
+ */
+export function searchCompatibleInverters(
+  systemVoltage: number,
   connectedLoadW: number,
   peakLoadW: number,
   inverterType: InverterType
-): InverterCalculationResult {
-  // 1. Calculate minimum raw rating based on continuous running load with a 25% safety margin
-  const minRawKva = (connectedLoadW * SYSTEM_STANDARDS.inverterSafetyFactor) / 1000;
+): RankedInverter[] {
+  const { minimumSizeKva, preferredSizeKva } = calculateInverterSizingTargets(
+    connectedLoadW,
+    peakLoadW
+  );
 
-  // 2. Calculate surge demand in kVA (motor startup + other loads)
-  const surgeKva = peakLoadW / 1000;
+  const pool = getInvertersForVoltage(systemVoltage, inverterType);
+  const ranked: RankedInverter[] = [];
 
-  // 3. Preferred capacity handles continuous load with 25% reserve AND supports the total surge capacity
-  // For safety, we take the larger of (Continuous Load * 1.25) or (Surge Load / 2.0)
-  const preferredRawKva = Math.max(minRawKva, surgeKva / 2.0);
+  for (const inverter of pool) {
+    const drawA =
+      (inverter.sizeKva * 1000) / (systemVoltage * inverter.efficiency);
+    const validation = validateInverterAgainstLoads(
+      inverter,
+      systemVoltage,
+      connectedLoadW,
+      peakLoadW,
+      drawA
+    );
+    if (!validation.valid) continue;
 
-  // Standard inverters sizes in kVA
-  const standardKvaRatings = [1.0, 2.0, 3.0, 5.0, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0];
+    let score = 100;
+    // Prefer meeting 1.25× continuous with least oversizing
+    const ratio = inverter.sizeKva / Math.max(preferredSizeKva, 0.1);
+    if (ratio >= 1.0 && ratio <= 1.4) score += 80;
+    else if (ratio > 1.4) score += Math.max(0, 50 - (ratio - 1.4) * 40);
+    else score += ratio * 40;
 
-  // Find standard size to match preferred capacity
-  let selectedSize = standardKvaRatings[0];
-  for (const rating of standardKvaRatings) {
-    if (preferredRawKva <= rating) {
-      selectedSize = rating;
-      break;
-    }
-    selectedSize = rating; // default to max
+    if (inverterType !== 'auto' && inverter.topology === inverterType) score += 40;
+    if (inverter.topology === 'hybrid') score += 10;
+    score += Math.min(30, inverter.numMppts * 10);
+    score += Math.min(20, inverter.maxPvCurrent);
+
+    const reason =
+      `${inverter.brand} ${inverter.model} (${inverter.sizeKva} kVA) selected. ` +
+      `Continuous load ${(connectedLoadW / 1000).toFixed(2)} kW ≤ ${inverter.sizeKva} kVA. ` +
+      `Peak load ${(peakLoadW / 1000).toFixed(2)} kW ≤ surge ${(inverter.sizeKva * inverter.surgeFactor).toFixed(1)} kW. ` +
+      `Battery bus ${systemVoltage}V compatible. ` +
+      `Engineering status: PASS.`;
+
+    ranked.push({
+      inverter,
+      minimumSizeKva,
+      preferredSizeKva,
+      validation,
+      score,
+      reason
+    });
   }
 
-  // Handle extremely large loads
-  if (preferredRawKva > standardKvaRatings[standardKvaRatings.length - 1]) {
-    selectedSize = Math.ceil(preferredRawKva / 5) * 5;
-  }
-
-  // 4. Recommend commercial hybrid or off-grid models
-  let modelName = '';
-  const isHybrid = inverterType === 'hybrid' || inverterType === 'auto';
-  
-  if (selectedSize <= 3.0) {
-    modelName = `VoltSolar ${isHybrid ? 'Hybrid' : 'Off-Grid'} LV-3000 (3kVA 24V)`;
-  } else if (selectedSize <= 5.0) {
-    modelName = `VoltSolar ${isHybrid ? 'Hybrid' : 'Off-Grid'} Smart-5000 (5kVA 48V)`;
-  } else if (selectedSize <= 8.0) {
-    modelName = `VoltSolar ${isHybrid ? 'Hybrid' : 'Off-Grid'} Pro-8000 (8kVA 48V)`;
-  } else if (selectedSize <= 12.0) {
-    modelName = `VoltSolar TriPhase ${isHybrid ? 'Hybrid' : 'Off-Grid'} Max-12K (12kVA 48V/3-Phase)`;
-  } else {
-    modelName = `VoltSolar industrial ${isHybrid ? 'Hybrid' : 'Off-Grid'} Mega-${selectedSize}K (${selectedSize}kVA 3-Phase)`;
-  }
-
-  // 5. Generate descriptive engineering justification
-  const surgeDiff = peakLoadW - connectedLoadW;
-  const reason = `${selectedSize} kVA ${isHybrid ? 'Hybrid' : 'Off-Grid'} Inverter selected. ` +
-    `Connected steady-state load is ${(connectedLoadW / 1000).toFixed(2)} kW. ` +
-    `Motor surge/starting headroom of ${(surgeDiff / 1000).toFixed(2)} kW is fully supported with a safety factor of ${SYSTEM_STANDARDS.inverterSafetyFactor}×, leaving a ${(selectedSize - minRawKva).toFixed(1)} kVA future expansion cushion.`;
-
-  return {
-    inverterSizeKva: selectedSize,
-    inverterMinimumSizeKva: parseFloat(minRawKva.toFixed(2)),
-    inverterPreferredSizeKva: parseFloat(preferredRawKva.toFixed(2)),
-    inverterModelRecommended: modelName,
-    inverterReason: reason
-  };
+  return ranked.sort((a, b) => b.score - a.score);
 }

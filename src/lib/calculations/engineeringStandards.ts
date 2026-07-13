@@ -70,18 +70,24 @@ export function getSurgeMultiplier(applianceName: string): number {
 
 // System Efficiencies and Loss Factors
 export const SYSTEM_STANDARDS = {
-  inverterEfficiency: 0.93,
+  inverterEfficiencyFallback: 0.96,
   chargeControllerEfficiency: 0.98,
   cableLossFactor: 0.02, // 2%
   dustLossFactor: 0.05,  // 5%
   temperatureDeratingFactor: 0.10, // 10% thermal losses
-  overallSystemEfficiency: 0.78, // Combined standard efficiency
-  inverterSafetyFactor: 1.25,     // 25% safety margin on inverter sizing
+  batteryEngineeringReserve: 1.20, // 20% sizing reserve
+  inverterSafetyFactor: 1.25,     // 25% safety margin on inverter continuous rating
   necBreakerMultiplier: 1.25,     // NEC 125% continuous rating multiplier for OCPD
   copperResistivity: 1.72e-8,     // Ω·m (at 20-30°C)
   maxCableVoltageDropPv: 0.02,    // Max 2% drop on DC PV String
   maxCableVoltageDropBattery: 0.01, // Max 1% drop on high-current DC Battery line
   maxCableVoltageDropAc: 0.03,     // Max 3% drop on AC load run
+  minDesignTempC: -10,            // Cold-weather Voc design temperature
+  maxCellTempC: 65,               // Hot-weather Vmp design temperature
+  stcTempC: 25,
+  acNominalVoltageV: 230,
+  selfCheckTolerancePercent: 1.0, // Independent verification tolerance
+  verificationAbsoluteKwh: 0.05,  // Battery kWh consistency absolute tolerance
 };
 
 // Panel characteristics

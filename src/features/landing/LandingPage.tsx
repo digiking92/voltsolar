@@ -8,9 +8,16 @@ import {
 interface LandingPageProps {
   onGetStarted: () => void;
   onLogin: () => void;
+  isAuthenticated?: boolean;
+  onEnterApp?: () => void;
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted, onLogin }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({
+  onGetStarted,
+  onLogin,
+  isAuthenticated = false,
+  onEnterApp
+}) => {
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
 
   const faqs = [
@@ -45,14 +52,20 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted, onLogin 
       {/* Navigation */}
       <header id="nav" className="sticky top-0 z-50 backdrop-blur-md bg-white/75 border-b border-slate-100">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
+          <button
+            type="button"
+            id="landing-logo-btn"
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            className="flex items-center space-x-3 hover:opacity-90 transition-opacity"
+            aria-label="VoltSolar homepage"
+          >
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#123A63] to-[#156DB7] flex items-center justify-center shadow-md">
               <Sun className="w-5 h-5 text-white animate-pulse" />
             </div>
             <span className="text-xl font-bold tracking-tight text-[#123A63]">
               Volt<span className="text-[#156DB7]">Solar</span>
             </span>
-          </div>
+          </button>
 
           <nav className="hidden md:flex items-center space-x-8">
             <a href="#features" className="text-sm font-medium text-slate-600 hover:text-[#156DB7] transition-colors">Features</a>
@@ -62,20 +75,32 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted, onLogin 
           </nav>
 
           <div className="flex items-center space-x-4">
-            <button 
-              id="login-btn"
-              onClick={onLogin} 
-              className="text-sm font-semibold text-slate-700 hover:text-[#156DB7] px-4 py-2 transition-colors"
-            >
-              Log in
-            </button>
-            <button 
-              id="get-started-btn"
-              onClick={onGetStarted} 
-              className="text-sm font-semibold bg-[#156DB7] hover:bg-[#0F5288] text-white px-5 py-2.5 rounded-xl shadow-sm hover:shadow transition-all duration-200"
-            >
-              Get Started
-            </button>
+            {isAuthenticated ? (
+              <button
+                id="enter-app-btn"
+                onClick={onEnterApp || onGetStarted}
+                className="text-sm font-semibold bg-[#156DB7] hover:bg-[#0F5288] text-white px-5 py-2.5 rounded-xl shadow-sm hover:shadow transition-all duration-200"
+              >
+                Go to Dashboard
+              </button>
+            ) : (
+              <>
+                <button 
+                  id="login-btn"
+                  onClick={onLogin} 
+                  className="text-sm font-semibold text-slate-700 hover:text-[#156DB7] px-4 py-2 transition-colors"
+                >
+                  Log in
+                </button>
+                <button 
+                  id="get-started-btn"
+                  onClick={onGetStarted} 
+                  className="text-sm font-semibold bg-[#156DB7] hover:bg-[#0F5288] text-white px-5 py-2.5 rounded-xl shadow-sm hover:shadow transition-all duration-200"
+                >
+                  Get Started
+                </button>
+              </>
+            )}
           </div>
         </div>
       </header>

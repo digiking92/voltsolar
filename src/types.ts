@@ -93,6 +93,11 @@ export interface Calculations {
   batteryParallelCount?: number;
   batteryExpectedBackupHours?: number;
   batteryUtilizationPercent?: number;
+  batteryMaxDischargeCurrentA?: number;
+  batteryMaxChargeCurrentA?: number;
+  batteryContinuousCurrentA?: number;
+  batteryChemistry?: BatteryType;
+  batteryConnectionSchematic?: string;
 
   // Solar Sizing Breakdown
   peakSunHoursUsed?: number;
@@ -109,10 +114,17 @@ export interface Calculations {
   panelImp?: number;
   stringVocMax?: number;
   stringVmpMax?: number;
+  stringVmpHot?: number;
   stringIscMax?: number;
   mpptVocLimit?: number;
   mpptVmpMin?: number;
   mpptVmpMax?: number;
+  currentPerMpptA?: number;
+  maxPvCurrentA?: number;
+  maxPvPowerW?: number;
+  seriesCount?: number;
+  parallelCount?: number;
+  targetPvKw?: number;
   panelSizingCompatibilityOk?: boolean;
   panelSizingCompatibilityWarning?: string;
 
@@ -135,8 +147,11 @@ export interface Calculations {
     deviceDetails?: {
       device: string;
       calculatedCurrentA: number;
+      requiredCurrentA?: number;
       safetyFactor: number;
       selectedRating: string;
+      nearestStandardRating?: string;
+      codeStandard?: string;
       justification: string;
     }[];
   };
@@ -145,10 +160,16 @@ export interface Calculations {
   cableSizing?: {
     pvCableSize?: string;
     pvCableVoltageDropPercent?: number;
+    pvCableAmpacityA?: number;
+    pvDesignCurrentA?: number;
     batteryCableSize?: string;
     batteryCableVoltageDropPercent?: number;
+    batteryCableAmpacityA?: number;
+    batteryDesignCurrentA?: number;
     acCableSize?: string;
     acCableVoltageDropPercent?: number;
+    acCableAmpacityA?: number;
+    acDesignCurrentA?: number;
     earthCableSize?: string;
   };
 

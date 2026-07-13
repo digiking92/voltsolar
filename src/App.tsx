@@ -13,25 +13,36 @@ import { Project } from './types';
 function MainApp() {
   const { isAuthenticated, logout } = useApp();
   const [activeTab, setActiveTab] = useState<string>('dashboard');
-  const [currentView, setCurrentView] = useState<'landing' | 'auth' | 'app'>('landing');
+  const [currentView, setCurrentView] = useState<'landing' | 'auth' | 'app'>(
+    isAuthenticated ? 'app' : 'landing'
+  );
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [projectToEdit, setProjectToEdit] = useState<Project | null>(null);
 
-  // Synchronize state on authentication change
+  // On logout, return to landing. Do not force app view on every auth tick —
+  // that would block logo navigation to the homepage while logged in.
   React.useEffect(() => {
-    if (isAuthenticated) {
-      setCurrentView('app');
-    } else {
+    if (!isAuthenticated) {
       setCurrentView('landing');
     }
   }, [isAuthenticated]);
 
   const handleGetStarted = () => {
+    if (isAuthenticated) {
+      setCurrentView('app');
+      setActiveTab('dashboard');
+      return;
+    }
     setAuthMode('signup');
     setCurrentView('auth');
   };
 
   const handleLogin = () => {
+    if (isAuthenticated) {
+      setCurrentView('app');
+      setActiveTab('dashboard');
+      return;
+    }
     setAuthMode('login');
     setCurrentView('auth');
   };
@@ -39,6 +50,11 @@ function MainApp() {
   const handleSuccessAuth = () => {
     setCurrentView('app');
     setActiveTab('dashboard');
+  };
+
+  const handleGoHome = () => {
+    setProjectToEdit(null);
+    setCurrentView('landing');
   };
 
   const handleEditProject = (project: Project) => {
@@ -52,7 +68,17 @@ function MainApp() {
   };
 
   if (currentView === 'landing') {
-    return <LandingPage onGetStarted={handleGetStarted} onLogin={handleLogin} />;
+    return (
+      <LandingPage
+        onGetStarted={handleGetStarted}
+        onLogin={handleLogin}
+        isAuthenticated={isAuthenticated}
+        onEnterApp={() => {
+          setCurrentView('app');
+          setActiveTab('dashboard');
+        }}
+      />
+    );
   }
 
   if (currentView === 'auth') {
@@ -70,11 +96,12 @@ function MainApp() {
       activeTab={activeTab} 
       setActiveTab={(tab) => {
         if (tab !== 'new_project') {
-          setProjectToEdit(null); // clear editing state
+          setProjectToEdit(null);
         }
         setActiveTab(tab);
       }} 
       onLogout={logout}
+      onLogoClick={handleGoHome}
     >
       {activeTab === 'dashboard' && (
         <DashboardPage 

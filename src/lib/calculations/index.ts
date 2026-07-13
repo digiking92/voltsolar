@@ -1,37 +1,52 @@
 import { ProjectAppliance, BatteryType, SystemVoltage, InverterType, Calculations } from '../../types';
-import { calculateLoadSchedule, LoadCalculationResult } from './loadCalculator';
-import { getBatteryFromDb, getInverterFromDb, getPanelFromDb, INVERTERS, SOLAR_PANELS, PanelSpecs, InverterSpecs, BatterySpecs } from './equipmentDatabase';
-import { getPeakSunHours } from './engineeringStandards';
+import { calculateLoadSchedule } from './loadCalculator';
+import { getCandidatePanels, PanelSpecs, InverterSpecs } from './equipmentDatabase';
+import { getPeakSunHours, SYSTEM_STANDARDS } from './engineeringStandards';
 import { configureBatteryBank } from './batteryConfiguration';
 import { sizeProtectionDevices } from './protectionSizing';
 import { sizeSystemCables } from './cableSizing';
-import { validateSystemDesign } from './validationEngine';
+import {
+  runConsistencyAudit,
+  runSelfCheckEngine,
+  buildDesignNotes
+} from './validationEngine';
 import { generateSingleLineDiagram } from './diagramGenerator';
+import { searchBatteryConfigurations, BatteryCalculationResult } from './batteryCalculator';
+import { searchValidStringConfigurations, PanelConfigurationResult } from './panelStringCalculator';
+import { searchCompatibleInverters } from './inverterCalculator';
 
 interface SolverCandidate {
   systemVoltage: number;
   inverter: InverterSpecs;
   panel: PanelSpecs;
-  battery: BatterySpecs;
-  batterySeriesCount: number;
-  batteryParallelCount: number;
-  batteryInstalledKwh: number;
-  batteryUsableKwh: number;
-  batteryCapacityAh: number;
-  seriesCount: number; // S
-  parallelCount: number; // P
-  totalPanels: number;
-  totalPvPowerW: number;
-  stringVocMax: number;
-  stringVmpMax: number;
-  stringVmpNominal: number;
-  stringIscMax: number;
-  currentPerMppt: number;
-  powerPerMppt: number;
-  score: number;
+  battery: BatteryCalculationResult;
+  stringLayout: PanelConfigurationResult;
   overallEfficiency: number;
+  targetPvWatts: number;
+  score: number;
+  inverterReason: string;
+  minimumSizeKva: number;
+  preferredSizeKva: number;
 }
 
+function overallPvEfficiency(
+  inverterEff: number,
+  batteryEff: number
+): number {
+  const { temperatureDeratingFactor, dustLossFactor, cableLossFactor } = SYSTEM_STANDARDS;
+  return (
+    (1 - temperatureDeratingFactor) *
+    (1 - dustLossFactor) *
+    (1 - cableLossFactor) *
+    inverterEff *
+    batteryEff
+  );
+}
+
+/**
+ * Constraint solver: search → validate → recommend.
+ * Never publishes a design that fails electrical or mathematical validation.
+ */
 export function runFullDesignCalculations(
   appliances: ProjectAppliance[],
   backupHours: number,
@@ -42,300 +57,272 @@ export function runFullDesignCalculations(
   inverterType: InverterType = 'auto',
   projectType: 'residential' | 'commercial' = 'residential'
 ): Calculations {
-  // --- STEP 1: Compute Connected Load Schedule & Peak Startup Surges ---
   const loadRes = calculateLoadSchedule(appliances);
-
   if (loadRes.connectedLoad === 0) {
-    throw new Error('Engineering Sizing Blocked: Connected load schedule is empty. Please add at least one appliance to proceed.');
+    throw new Error(
+      'Engineering Sizing Blocked: Connected load schedule is empty. Please add at least one appliance to proceed.'
+    );
   }
 
-  // --- STEP 2: Multi-Dimensional Constraint Solver ---
-  const candidateVoltages = systemVoltage === 'auto'
-    ? [48, 24, 12]
-    : [parseInt(systemVoltage.replace('V', ''), 10)];
+  const candidateVoltages =
+    systemVoltage === 'auto'
+      ? [48, 24, 12]
+      : [parseInt(systemVoltage.replace('V', ''), 10)];
 
   const psh = getPeakSunHours(location);
+  const panels = getCandidatePanels(panelSize);
   const candidates: SolverCandidate[] = [];
 
   for (const vSys of candidateVoltages) {
-    // 2.1 Calculate One-Directional Battery Sizing Target for this Voltage
-    const batteryRequiredKwhRaw = (loadRes.dailyEnergy * (backupHours / 24)) / 1000;
-    const correctedForInverterKwh = batteryRequiredKwhRaw / 0.96;
-    const batteryEfficiency = batteryType === 'lithium' ? 0.95 : 0.85;
-    const correctedForBatteryKwh = correctedForInverterKwh / batteryEfficiency;
-    const batteryDodUsed = batteryType === 'lithium' ? 0.90 : 0.50;
-    const correctedForDodKwh = correctedForBatteryKwh / batteryDodUsed;
-    const batteryCapacityKwhTarget = correctedForDodKwh * 1.20; // 20% engineering safety margin
-    const targetAh = (batteryCapacityKwhTarget * 1000) / vSys;
+    const rankedInverters = searchCompatibleInverters(
+      vSys,
+      loadRes.connectedLoad,
+      loadRes.peakLoad,
+      inverterType
+    );
 
-    // Retrieve battery specifications
-    const batteryModel = getBatteryFromDb(batteryType, vSys === 48 ? 48 : 12);
-    const batterySeriesCount = Math.ceil(vSys / batteryModel.voltage);
+    for (const invRank of rankedInverters) {
+      const inv = invRank.inverter;
 
-    // 2.2 Filter inverters matching this voltage and continuous load
-    const minRequiredKva = loadRes.connectedLoad / 1000;
-    let matchingInverters = INVERTERS.filter(inv => inv.voltageV === vSys);
+      const batteryOptions = searchBatteryConfigurations(
+        loadRes.dailyEnergy,
+        backupHours,
+        batteryType,
+        vSys,
+        inv.sizeKva * 1000,
+        inv.efficiency,
+        inv.maxBatteryDischargeCurrentA,
+        inv.maxBatteryChargeCurrentA
+      );
 
-    // If no inverter in the DB fits, extrapolate one safely
-    if (matchingInverters.length === 0 || !matchingInverters.some(inv => inv.sizeKva >= minRequiredKva)) {
-      const neededKva = Math.ceil(Math.max(minRequiredKva * 1.25, loadRes.peakLoad / 2000));
-      const extrapolated = getInverterFromDb(neededKva, vSys);
-      matchingInverters.push(extrapolated);
-    }
+      for (const batt of batteryOptions) {
+        if (!batt.batteryCurrentOk) continue;
 
-    for (const inv of matchingInverters) {
-      // Inverter must handle continuous load
-      if (inv.sizeKva < minRequiredKva) continue;
+        const eff = overallPvEfficiency(inv.efficiency, batt.batteryEfficiency);
+        const targetPvWatts = loadRes.dailyEnergy / (psh * eff);
 
-      // Calculate inverter full DC current draw to size battery strings for discharge limits
-      const inverterPowerW = inv.sizeKva * 1000;
-      const batteryInverterDrawA = inverterPowerW / (vSys * 0.96);
-      const cRateMultiplier = batteryType === 'lithium' ? 1.0 : 0.2;
+        for (const panel of panels) {
+          const layouts = searchValidStringConfigurations(
+            panel,
+            inv,
+            targetPvWatts,
+            panel.sizeW === panelSize
+          );
 
-      // Determine required parallel count to satisfy both Capacity (Ah) and safe continuous Discharge Current (C-rate)
-      const minParallelForCapacity = Math.ceil(targetAh / batteryModel.capacityAh);
-      const minParallelForCurrent = Math.ceil(batteryInverterDrawA / (batteryModel.capacityAh * cRateMultiplier));
-      const batteryParallelCount = Math.max(1, minParallelForCapacity, minParallelForCurrent);
+          for (const layout of layouts) {
+            let score = invRank.score * 0.35 + batt.score * 0.25 + layout.score * 0.4;
+            if (vSys === 48) score += 40;
+            else if (vSys === 24) score += 20;
+            if (panel.sizeW === panelSize) score += 30;
 
-      const batteryCapacityAh = batteryParallelCount * batteryModel.capacityAh;
-      const batteryInstalledKwh = (batterySeriesCount * batteryModel.voltage * batteryCapacityAh) / 1000;
-      const batteryUsableKwh = batteryInstalledKwh * batteryDodUsed;
+            const pvChecks =
+              `MPPT Current Compatible: YES (${layout.currentPerMppt}A ≤ ${inv.maxPvCurrent}A). ` +
+              `PV Voltage Compatible: YES (${layout.stringVocMax}V ≤ ${inv.mpptVocLimit}V). ` +
+              `PV Power Compatible: YES (${layout.totalPvPowerW}W ≤ ${inv.maxPvPower}W). ` +
+              `Battery Voltage Compatible: YES (${vSys}V). ` +
+              `Future Expansion: ~${Math.max(0, Math.round((1 - loadRes.connectedLoad / (inv.sizeKva * 1000)) * 100))}%. ` +
+              `Engineering Status: PASS.`;
 
-      // Verify battery can support inverter draw
-      const batteryMaxDischargeCurrentA = batteryCapacityAh * cRateMultiplier;
-      if (batteryMaxDischargeCurrentA < batteryInverterDrawA) continue; // Incompatible combination
-
-      // Evaluate panels: check both requested size and database sizes for a valid layout
-      const candidatePanels = [
-        getPanelFromDb(panelSize),
-        ...SOLAR_PANELS.filter(p => p.sizeW !== panelSize)
-      ];
-
-      for (const panel of candidatePanels) {
-        // Compute overall combined solar efficiency
-        const tempLoss = 0.10;
-        const dustLoss = 0.05;
-        const cableLoss = 0.02;
-        const overallEfficiency = (1 - tempLoss) * (1 - dustLoss) * (1 - cableLoss) * inv.efficiency * batteryEfficiency;
-        const targetPvWatts = loadRes.dailyEnergy / (psh * overallEfficiency);
-
-        // Compute panel Voc and Vmp derating factors for extreme temperatures
-        // Standard design boundaries: Cold weather -10°C, Hot weather +65°C
-        const vocCold = panel.voc * (1 + (panel.tempCoeffVoc * (-10 - 25)) / 100);
-        const vmpHot = panel.vmp * (1 + (panel.tempCoeffVoc * (65 - 25)) / 100);
-
-        const maxPanelsInSeries = Math.floor(inv.mpptVocLimit / vocCold);
-        const minPanelsInSeries = Math.ceil(inv.mpptVmpMin / vmpHot);
-
-        if (maxPanelsInSeries < 1 || minPanelsInSeries > maxPanelsInSeries) continue;
-
-        // Search for valid S × P layouts
-        for (let s = minPanelsInSeries; s <= maxPanelsInSeries; s++) {
-          for (let p = 1; p <= 16; p++) {
-            const totalPanels = s * p;
-            const totalPvPowerW = totalPanels * panel.sizeW;
-
-            // Inverters >= 5kVA typically have 2 MPPTs, smaller have 1
-            const numMppts = inv.sizeKva >= 5.0 ? 2 : 1;
-            const currentPerMppt = Math.ceil(p / numMppts) * panel.isc * 1.25; // 1.25 continuous safety factor
-            const powerPerMppt = s * Math.ceil(p / numMppts) * panel.sizeW;
-
-            // Strict PV constraints verification
-            const isVocValid = (s * vocCold) <= inv.mpptVocLimit;
-            const isVmpHotValid = (s * vmpHot) >= inv.mpptVmpMin;
-            const isVmpMaxValid = (s * panel.vmp) <= inv.mpptVmpMax;
-            const isCurrentValid = currentPerMppt <= inv.maxPvCurrent;
-            const isPowerValid = totalPvPowerW <= inv.maxPvPower;
-
-            if (isVocValid && isVmpHotValid && isVmpMaxValid && isCurrentValid && isPowerValid) {
-              // Calculate candidate sizing performance score
-              let score = 100;
-
-              // Favor user's requested panel size
-              if (panel.sizeW === panelSize) {
-                score += 500;
-              }
-
-              // Sizing proximity score: ideally totalPvPowerW is 100% to 125% of targetPvWatts
-              const sizingRatio = totalPvPowerW / targetPvWatts;
-              if (sizingRatio >= 1.0 && sizingRatio <= 1.25) {
-                score += 150;
-              } else if (sizingRatio > 1.25) {
-                // Penalize severe oversizing
-                score += Math.max(0, 100 - (sizingRatio - 1.25) * 100);
-              } else {
-                // Penalize undersizing
-                score += Math.max(0, sizingRatio * 50);
-              }
-
-              // Favor system bus voltage efficiency (48V over 24V over 12V)
-              if (vSys === 48) score += 200;
-              else if (vSys === 24) score += 100;
-
-              candidates.push({
-                systemVoltage: vSys,
-                inverter: inv,
-                panel,
-                battery: batteryModel,
-                batterySeriesCount,
-                batteryParallelCount,
-                batteryInstalledKwh,
-                batteryUsableKwh,
-                batteryCapacityAh,
-                seriesCount: s,
-                parallelCount: p,
-                totalPanels,
-                totalPvPowerW,
-                stringVocMax: parseFloat((s * vocCold).toFixed(1)),
-                stringVmpMax: parseFloat((s * panel.vmp).toFixed(1)),
-                stringVmpNominal: parseFloat((s * panel.vmp).toFixed(1)),
-                stringIscMax: parseFloat((p * panel.isc).toFixed(1)),
-                currentPerMppt: parseFloat(currentPerMppt.toFixed(1)),
-                powerPerMppt: parseFloat(powerPerMppt.toFixed(1)),
-                score,
-                overallEfficiency
-              });
-            }
+            candidates.push({
+              systemVoltage: vSys,
+              inverter: inv,
+              panel,
+              battery: batt,
+              stringLayout: layout,
+              overallEfficiency: eff,
+              targetPvWatts,
+              score,
+              inverterReason: `${invRank.reason} ${pvChecks}`,
+              minimumSizeKva: invRank.minimumSizeKva,
+              preferredSizeKva: invRank.preferredSizeKva
+            });
           }
         }
       }
     }
   }
 
-  // Sort candidates to select the highest engineering score
   candidates.sort((a, b) => b.score - a.score);
 
   if (candidates.length === 0) {
-    throw new Error('Engineering Validation Failed: No compatible panel, inverter, and battery equipment combination satisfies the electrical, thermal, and capacity safety constraints for your load profile.');
+    throw new Error(
+      'Engineering Validation Failed: No compatible panel, inverter, and battery combination satisfies the electrical, thermal, and capacity constraints. Try a different inverter type, panel wattage, battery chemistry, or system voltage.'
+    );
   }
 
   const best = candidates[0];
-
-  // Sizing inputs variables in compiling scope
-  const batteryRequiredKwhRaw = (loadRes.dailyEnergy * (backupHours / 24)) / 1000;
-  const batteryEfficiency = batteryType === 'lithium' ? 0.95 : 0.85;
-  const batteryDodUsed = batteryType === 'lithium' ? 0.90 : 0.50;
-  const minRequiredKva = loadRes.connectedLoad / 1000;
-
-  // --- STEP 3: Engineering Sizing Calculations Compilation ---
+  const batt = best.battery;
+  const layout = best.stringLayout;
+  const inv = best.inverter;
   const resolvedSystemVoltage = best.systemVoltage;
-  const inverterPowerW = best.inverter.sizeKva * 1000;
+  const inverterPowerW = inv.sizeKva * 1000;
 
-  // Sizing electrical protection devices
   const protectionRes = sizeProtectionDevices(
-    best.stringIscMax,
-    best.stringVocMax,
+    layout.stringIscMax,
+    layout.stringVocMax,
     resolvedSystemVoltage,
     inverterPowerW,
     projectType === 'commercial'
   );
 
-  // Sizing copper conductors cables
   const cableRes = sizeSystemCables(
-    best.stringIscMax,
-    best.stringVmpMax,
+    layout.stringIscMax,
+    layout.stringVmpNominal,
     protectionRes.calculationsRaw.maxInverterDcCurrent,
     resolvedSystemVoltage,
     protectionRes.calculationsRaw.maxAcOutputCurrent
   );
 
-  // Sizing connection grids
   const batteryLayout = configureBatteryBank(
-    best.batterySeriesCount,
-    best.batteryParallelCount,
-    best.battery.voltage,
-    best.battery.capacityAh,
-    batteryType === 'lithium' ? 0.90 : 0.50
+    batt.batterySeriesCount,
+    batt.batteryParallelCount,
+    batt.batteryUnitVoltage,
+    batt.batteryUnitCapacityAh,
+    batt.batteryDodUsed
   );
 
-  // Compile design assumptions
-  const assumptions = [
-    { label: 'Meteorological Peak Sun Hours', value: psh, unit: 'hrs/day' },
-    { label: 'Thermal Panel Derating Coefficient', value: 10, unit: '%' },
-    { label: 'PV Soiling & Dust Loss Coeff.', value: 5, unit: '%' },
-    { label: 'DC Cable Transmission Loss Coeff.', value: 2, unit: '%' },
-    { label: 'Inverter Conversion Efficiency', value: Math.round(best.inverter.efficiency * 100), unit: '%' },
-    { label: 'Battery Charge Round-Trip Efficiency', value: Math.round(best.overallEfficiency / 0.8 * 100), unit: '%' },
-    { label: 'Allowable Battery Depth of Discharge', value: Math.round((batteryType === 'lithium' ? 0.90 : 0.50) * 100), unit: '%' },
-    { label: 'Battery Engineering Sizing Reserve', value: 20, unit: '%' },
-    { label: 'Inverter Sizing Safety Overload Factor', value: 1.25, unit: 'x' },
-    { label: 'NEC Cable Sizing Continuous Current Multiplier', value: 1.25, unit: 'x' }
-  ];
-
-  // Compile design validation warnings / status checklist
-  const validationWarnings = validateSystemDesign({
+  // Consistency audit — hard gate before report
+  const audit = runConsistencyAudit({
+    appliances,
+    dailyEnergyWh: loadRes.dailyEnergy,
+    backupHours,
+    batteryType,
+    systemVoltage: resolvedSystemVoltage,
+    battery: batt.batteryUnit,
+    batteryInstalledKwh: batt.batteryInstalledKwh,
+    batteryCapacityAh: batt.batteryCapacityAh,
+    batterySeriesCount: batt.batterySeriesCount,
+    batteryParallelCount: batt.batteryParallelCount,
+    batteryUsableKwh: batt.batteryUsableKwh,
+    inverter: inv,
+    panel: best.panel,
+    seriesCount: layout.seriesCount,
+    parallelCount: layout.parallelCount,
+    totalPanels: layout.totalPanels,
+    totalPvPowerW: layout.totalPvPowerW,
+    stringVocMax: layout.stringVocMax,
+    stringIscMax: layout.stringIscMax,
+    currentPerMppt: layout.currentPerMppt,
     connectedLoadW: loadRes.connectedLoad,
     peakLoadW: loadRes.peakLoad,
-    dailyEnergyWh: loadRes.dailyEnergy,
-    batteryCapacityKwh: best.batteryInstalledKwh,
-    batteryUsableKwh: best.batteryUsableKwh,
-    batteryInstalledKwh: best.batteryInstalledKwh,
-    solarArrayKw: parseFloat((best.totalPvPowerW / 1000).toFixed(2)),
-    estimatedDailyProductionKwh: parseFloat(((best.totalPvPowerW * psh * best.overallEfficiency) / 1000).toFixed(2)),
-    inverterSizeKva: best.inverter.sizeKva,
-    panelSizingCompatibilityOk: true,
-    panelSizingCompatibilityWarning: 'PV Array configuration is fully compatible and mathematically validated.',
-    stringVocMax: best.stringVocMax,
-    mpptVocLimit: best.inverter.mpptVocLimit,
-    backupHours
+    batteryInverterDrawA: batt.batteryInverterDrawA,
+    pvCableAreaMm2: cableRes.calculationsRaw.pvCableAreaMm2,
+    batteryCableAreaMm2: cableRes.calculationsRaw.batteryCableAreaMm2,
+    acCableAreaMm2: cableRes.calculationsRaw.acCableAreaMm2,
+    acBreakerCurrentA: protectionRes.calculationsRaw.selectedAcBreakerRating,
+    panelQuantityReported: layout.totalPanels,
+    batteryQuantityReported: batt.batteryQuantity
   });
 
-  // Assemble explanations (Issue 8)
-  const inverterReason = `${best.inverter.sizeKva} kVA Hybrid Inverter selected. ` +
-    `Continuous steady-state load is ${(loadRes.connectedLoad / 1000).toFixed(2)} kW. ` +
-    `Total motor surge/starting demand is ${(loadRes.peakLoad / 1000).toFixed(2)} kW, leaving a ${(best.inverter.sizeKva - minRequiredKva).toFixed(1)} kVA continuous buffer. ` +
-    `MPPT parameters are completely compatible (String Voc: ${best.stringVocMax}V ≤ Limit: ${best.inverter.mpptVocLimit}V, String Current: ${best.currentPerMppt}A ≤ Limit: ${best.inverter.maxPvCurrent}A).`;
-
-  // --- STEP 4: Double Verification Audits (Issue 5 & Issue 7) ---
-  
-  // 4.1 Battery Mathematical Consistency Verification (Issue 1)
-  const expectedKwh = (resolvedSystemVoltage * best.batteryCapacityAh) / 1000;
-  if (Math.abs(best.batteryInstalledKwh - expectedKwh) > 0.05) {
-    throw new Error('Engineering Calculation Error: Battery sizing inconsistency detected. Sized kWh must exactly equal system voltage × Ah / 1000.');
+  if (!audit.passed) {
+    throw new Error(
+      `Engineering Validation Failed:\n${audit.errors.join('\n')}`
+    );
   }
 
-  // 4.2 Absolute Limits Audits (Issue 5)
-  if (best.stringVocMax > best.inverter.mpptVocLimit) {
-    throw new Error(`Engineering Sizing Audit Failed: String Voc (${best.stringVocMax}V) exceeds maximum inverter PV voltage (${best.inverter.mpptVocLimit}V).`);
-  }
-  if (best.currentPerMppt > best.inverter.maxPvCurrent) {
-    throw new Error(`Engineering Sizing Audit Failed: String continuous current (${best.currentPerMppt}A) exceeds inverter input current limit (${best.inverter.maxPvCurrent}A).`);
-  }
-  if (best.totalPvPowerW > best.inverter.maxPvPower) {
-    throw new Error(`Engineering Sizing Audit Failed: Total solar array wattage (${best.totalPvPowerW}W) exceeds maximum inverter DC limit (${best.inverter.maxPvPower}W).`);
-  }
-  
-  // Verify cable conductor capacities
-  const pvCableLimit = 41; // 4.0mm² typical amplicity limit
-  if (best.stringIscMax * 1.25 > pvCableLimit) {
-    throw new Error(`Engineering Sizing Audit Failed: PV String continuous design current exceeds selected solar cable amplicity.`);
+  const selfCheck = runSelfCheckEngine({
+    appliances,
+    dailyEnergyWh: loadRes.dailyEnergy,
+    backupHours,
+    systemVoltage: resolvedSystemVoltage,
+    inverterEfficiency: inv.efficiency,
+    batteryEfficiency: batt.batteryEfficiency,
+    batteryDod: batt.batteryDodUsed,
+    batteryInstalledKwh: batt.batteryInstalledKwh,
+    batteryCapacityAh: batt.batteryCapacityAh
+  });
+
+  if (!selfCheck.passed) {
+    throw new Error(selfCheck.errors.join('\n'));
   }
 
-  // 4.3 Self-Check Engine Independent Recalculation Verification (Issue 7)
-  const loadCheck = calculateLoadSchedule(appliances);
-  if (Math.abs(loadCheck.dailyEnergy - loadRes.dailyEnergy) > 1.0) {
-    throw new Error('Internal Engineering Verification Failed: Load energy recalculation deviation exceeds 1% tolerance.');
-  }
-  
-  const rawTargetKwh = (loadCheck.dailyEnergy * (backupHours / 24)) / 1000;
-  const expectedTargetKwh = (rawTargetKwh / 0.96 / (batteryType === 'lithium' ? 0.95 : 0.85) / (batteryType === 'lithium' ? 0.90 : 0.50)) * 1.20;
-  
-  // Sized battery must meet or exceed target capacity
-  if (best.batteryInstalledKwh < expectedTargetKwh - 0.1) {
-    throw new Error('Internal Engineering Verification Failed: Installed battery bank capacity is less than raw engineering requirements.');
-  }
+  const estimatedDailyProductionKwh = parseFloat(
+    ((layout.totalPvPowerW * psh * best.overallEfficiency) / 1000).toFixed(2)
+  );
+  const solarArrayKw = parseFloat((layout.totalPvPowerW / 1000).toFixed(2));
 
-  // Execute electrical Single-Line Diagram compilation
+  const validationWarnings = [
+    ...audit.warnings,
+    ...buildDesignNotes({
+      connectedLoadW: loadRes.connectedLoad,
+      inverterSizeKva: inv.sizeKva,
+      estimatedDailyProductionKwh,
+      dailyEnergyWh: loadRes.dailyEnergy,
+      solarArrayKw,
+      batteryUsableKwh: batt.batteryUsableKwh,
+      peakSunHours: psh
+    })
+  ];
+
+  const assumptions = [
+    { label: 'Meteorological Peak Sun Hours', value: psh, unit: 'hrs/day' },
+    {
+      label: 'Thermal Panel Derating Coefficient',
+      value: SYSTEM_STANDARDS.temperatureDeratingFactor * 100,
+      unit: '%'
+    },
+    {
+      label: 'PV Soiling & Dust Loss Coeff.',
+      value: SYSTEM_STANDARDS.dustLossFactor * 100,
+      unit: '%'
+    },
+    {
+      label: 'DC Cable Transmission Loss Coeff.',
+      value: SYSTEM_STANDARDS.cableLossFactor * 100,
+      unit: '%'
+    },
+    {
+      label: 'Inverter Conversion Efficiency',
+      value: Math.round(inv.efficiency * 100),
+      unit: '%'
+    },
+    {
+      label: 'Battery Round-Trip Efficiency',
+      value: Math.round(batt.batteryEfficiency * 100),
+      unit: '%'
+    },
+    {
+      label: 'Allowable Battery Depth of Discharge',
+      value: Math.round(batt.batteryDodUsed * 100),
+      unit: '%'
+    },
+    {
+      label: 'Battery Engineering Sizing Reserve',
+      value: Math.round((SYSTEM_STANDARDS.batteryEngineeringReserve - 1) * 100),
+      unit: '%'
+    },
+    {
+      label: 'Inverter Sizing Safety Factor',
+      value: SYSTEM_STANDARDS.inverterSafetyFactor,
+      unit: 'x'
+    },
+    {
+      label: 'NEC Continuous Current Multiplier',
+      value: SYSTEM_STANDARDS.necBreakerMultiplier,
+      unit: 'x'
+    },
+    {
+      label: 'Cold Design Temperature (Voc)',
+      value: SYSTEM_STANDARDS.minDesignTempC,
+      unit: '°C'
+    },
+    {
+      label: 'Hot Cell Temperature (Vmp)',
+      value: SYSTEM_STANDARDS.maxCellTempC,
+      unit: '°C'
+    }
+  ];
+
   const sldSvg = generateSingleLineDiagram({
-    panelQuantity: best.totalPanels,
+    panelQuantity: layout.totalPanels,
     panelWattage: best.panel.sizeW,
-    seriesCount: best.seriesCount,
-    parallelCount: best.parallelCount,
-    batteryQuantity: best.batterySeriesCount * best.batteryParallelCount,
+    seriesCount: layout.seriesCount,
+    parallelCount: layout.parallelCount,
+    batteryQuantity: batt.batteryQuantity,
     batteryType,
-    batteryCapacityAh: best.batteryCapacityAh,
+    batteryCapacityAh: batt.batteryCapacityAh,
     batteryVoltage: resolvedSystemVoltage,
-    inverterSizeKva: best.inverter.sizeKva,
+    inverterSizeKva: inv.sizeKva,
     inverterType,
     dcStringFuse: protectionRes.dcStringFuse,
     dcStringIsolator: protectionRes.dcStringIsolator,
@@ -351,60 +338,71 @@ export function runFullDesignCalculations(
     peakLoad: loadRes.peakLoad,
     dailyEnergy: loadRes.dailyEnergy,
     monthlyEnergy: loadRes.monthlyEnergy,
-    batteryCapacityKwh: best.batteryInstalledKwh,
-    batteryCapacityAh: best.batteryCapacityAh,
-    batteryQuantity: best.batterySeriesCount * best.batteryParallelCount,
-    batteryConfiguration: `${best.batterySeriesCount} Series × ${best.batteryParallelCount} Parallel (${best.batterySeriesCount * best.batteryParallelCount} Units of ${best.battery.voltage}V ${best.battery.capacityAh}Ah)`,
-    inverterSizeKva: best.inverter.sizeKva,
-    inverterReason,
-    solarArrayKw: parseFloat((best.totalPvPowerW / 1000).toFixed(2)),
-    panelQuantity: best.totalPanels,
-    panelConfiguration: `${best.seriesCount} Series × ${best.parallelCount} Parallel (${best.totalPanels} Panels total)`,
-    estimatedDailyProductionKwh: parseFloat(((best.totalPvPowerW * psh * best.overallEfficiency) / 1000).toFixed(2)),
+    batteryCapacityKwh: batt.batteryInstalledKwh,
+    batteryCapacityAh: batt.batteryCapacityAh,
+    batteryQuantity: batt.batteryQuantity,
+    batteryConfiguration: batt.batteryConfiguration,
+    inverterSizeKva: inv.sizeKva,
+    inverterReason: best.inverterReason,
+    solarArrayKw,
+    panelQuantity: layout.totalPanels,
+    panelConfiguration: layout.panelConfiguration,
+    estimatedDailyProductionKwh,
 
-    // Sizing parameters
     continuousLoadW: loadRes.continuousLoadW,
     motorStartupLoadW: loadRes.motorStartupLoadW,
     designLoadW: loadRes.designLoadW,
     diversityFactor: loadRes.diversityFactor,
     loadBreakdown: loadRes.loadBreakdown,
 
-    batteryProductModel: `${best.battery.brand} ${best.battery.model} [${(best.battery.voltage * best.battery.capacityAh / 1000).toFixed(1)} kWh]`,
-    batteryUnitCapacityAh: best.battery.capacityAh,
-    batteryUnitVoltage: best.battery.voltage,
-    batteryRequiredKwhRaw: parseFloat(batteryRequiredKwhRaw.toFixed(2)),
-    batteryUsableKwh: best.batteryUsableKwh,
-    batteryInstalledKwh: best.batteryInstalledKwh,
-    batteryEfficiency,
-    batteryDodUsed,
-    batterySeriesCount: best.batterySeriesCount,
-    batteryParallelCount: best.batteryParallelCount,
-    batteryExpectedBackupHours: parseFloat((best.batteryUsableKwh * 1000 * 0.96 / (loadRes.dailyEnergy / 24)).toFixed(1)),
-    batteryUtilizationPercent: Math.min(Math.round((batteryRequiredKwhRaw / best.batteryUsableKwh) * 100), 100),
+    batteryProductModel: batt.batteryProductModel,
+    batteryUnitCapacityAh: batt.batteryUnitCapacityAh,
+    batteryUnitVoltage: batt.batteryUnitVoltage,
+    batteryRequiredKwhRaw: batt.batteryRequiredKwhRaw,
+    batteryUsableKwh: batt.batteryUsableKwh,
+    batteryInstalledKwh: batt.batteryInstalledKwh,
+    batteryEfficiency: batt.batteryEfficiency,
+    batteryDodUsed: batt.batteryDodUsed,
+    batterySeriesCount: batt.batterySeriesCount,
+    batteryParallelCount: batt.batteryParallelCount,
+    batteryExpectedBackupHours: batt.batteryExpectedBackupHours,
+    batteryUtilizationPercent: batt.batteryUtilizationPercent,
+    batteryMaxDischargeCurrentA: batt.batteryMaxDischargeCurrentA,
+    batteryMaxChargeCurrentA: batt.batteryMaxChargeCurrentA,
+    batteryContinuousCurrentA: batt.batteryInverterDrawA,
+    batteryChemistry: batt.batteryChemistry,
+    batteryConnectionSchematic: batteryLayout.connectionSchematic,
 
     peakSunHoursUsed: psh,
     overallSystemEfficiency: parseFloat((best.overallEfficiency * 100).toFixed(1)),
-    temperatureLossPercent: 10,
-    dustLossPercent: 5,
-    cableLossPercent: 2,
-    dailyHarvestWhRaw: parseFloat((best.totalPvPowerW * psh / 1000).toFixed(2)),
+    temperatureLossPercent: SYSTEM_STANDARDS.temperatureDeratingFactor * 100,
+    dustLossPercent: SYSTEM_STANDARDS.dustLossFactor * 100,
+    cableLossPercent: SYSTEM_STANDARDS.cableLossFactor * 100,
+    dailyHarvestWhRaw: parseFloat(((layout.totalPvPowerW * psh) / 1000).toFixed(2)),
 
     panelVoc: best.panel.voc,
     panelVmp: best.panel.vmp,
     panelIsc: best.panel.isc,
     panelImp: best.panel.imp,
-    stringVocMax: best.stringVocMax,
-    stringVmpMax: best.stringVmpMax,
-    stringIscMax: best.stringIscMax,
-    mpptVocLimit: best.inverter.mpptVocLimit,
-    mpptVmpMin: best.inverter.mpptVmpMin,
-    mpptVmpMax: best.inverter.mpptVmpMax,
+    stringVocMax: layout.stringVocMax,
+    stringVmpMax: layout.stringVmpNominal,
+    stringVmpHot: layout.stringVmpHot,
+    stringIscMax: layout.stringIscMax,
+    mpptVocLimit: inv.mpptVocLimit,
+    mpptVmpMin: inv.mpptVmpMin,
+    mpptVmpMax: inv.mpptVmpMax,
+    currentPerMpptA: layout.currentPerMppt,
+    maxPvCurrentA: inv.maxPvCurrent,
+    maxPvPowerW: inv.maxPvPower,
+    seriesCount: layout.seriesCount,
+    parallelCount: layout.parallelCount,
+    targetPvKw: parseFloat((best.targetPvWatts / 1000).toFixed(2)),
     panelSizingCompatibilityOk: true,
-    panelSizingCompatibilityWarning: 'Selected PV Array is 100% compliant with MPPT limits.',
+    panelSizingCompatibilityWarning: layout.panelSizingCompatibilityWarning,
 
-    inverterPreferredSizeKva: best.inverter.sizeKva,
-    inverterMinimumSizeKva: minRequiredKva,
-    inverterModelRecommended: `${best.inverter.brand} ${best.inverter.model}`,
+    inverterPreferredSizeKva: best.preferredSizeKva,
+    inverterMinimumSizeKva: best.minimumSizeKva,
+    inverterModelRecommended: `${inv.brand} ${inv.model}`,
 
     protectionSchedule: {
       dcStringFuse: protectionRes.dcStringFuse,
@@ -416,17 +414,23 @@ export function runFullDesignCalculations(
       acRcdBreaker: protectionRes.acRcdBreaker,
       earthElectrode: protectionRes.earthElectrode,
       distributionBoard: protectionRes.distributionBoard,
-      deviceDetails: protectionRes.deviceDetails,
+      deviceDetails: protectionRes.deviceDetails
     },
 
     cableSizing: {
       pvCableSize: cableRes.pvCableSize,
       pvCableVoltageDropPercent: cableRes.pvCableVoltageDropPercent,
+      pvCableAmpacityA: cableRes.pvCableAmpacityA,
+      pvDesignCurrentA: cableRes.pvDesignCurrentA,
       batteryCableSize: cableRes.batteryCableSize,
       batteryCableVoltageDropPercent: cableRes.batteryCableVoltageDropPercent,
+      batteryCableAmpacityA: cableRes.batteryCableAmpacityA,
+      batteryDesignCurrentA: cableRes.batteryDesignCurrentA,
       acCableSize: cableRes.acCableSize,
       acCableVoltageDropPercent: cableRes.acCableVoltageDropPercent,
-      earthCableSize: cableRes.earthCableSize,
+      acCableAmpacityA: cableRes.acCableAmpacityA,
+      acDesignCurrentA: cableRes.acDesignCurrentA,
+      earthCableSize: cableRes.earthCableSize
     },
 
     validationWarnings,

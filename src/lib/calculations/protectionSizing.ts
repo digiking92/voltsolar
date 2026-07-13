@@ -1,8 +1,11 @@
 export interface ProtectionDeviceDetail {
   device: string;
   calculatedCurrentA: number;
+  requiredCurrentA: number;
   safetyFactor: number;
   selectedRating: string;
+  nearestStandardRating: string;
+  codeStandard: string;
   justification: string;
 }
 
@@ -20,8 +23,10 @@ export interface ProtectionCalculationResult {
   calculationsRaw: {
     maxInverterDcCurrent: number;
     recommendedBatteryBreakerRating: number;
+    selectedBatteryBreakerRating: number;
     maxAcOutputCurrent: number;
     recommendedAcBreakerRating: number;
+    selectedAcBreakerRating: number;
   };
 }
 
@@ -34,9 +39,7 @@ export function sizeProtectionDevices(
 ): ProtectionCalculationResult {
   const details: ProtectionDeviceDetail[] = [];
 
-  // 1. PV DC String Fuse Sizing (Isc * 1.25 * 1.25)
-  const pvCalculatedCurrent = stringIscMax;
-  const pvSafetyFactor = 1.5625; // 1.25 * 1.25
+  const pvSafetyFactor = 1.5625;
   const rawPvFuseRating = stringIscMax * pvSafetyFactor;
   const standardFuseRatings = [10, 12, 15, 20, 25, 30, 40, 50];
   let pvFuseRating = standardFuseRatings[0];
@@ -50,53 +53,42 @@ export function sizeProtectionDevices(
   const dcStringFuse = `${pvFuseRating}A 1000V DC Symmetrical gPV Fuse`;
   details.push({
     device: 'PV Array String Fuse',
-    calculatedCurrentA: parseFloat(pvCalculatedCurrent.toFixed(2)),
+    calculatedCurrentA: parseFloat(stringIscMax.toFixed(2)),
+    requiredCurrentA: parseFloat(rawPvFuseRating.toFixed(2)),
     safetyFactor: pvSafetyFactor,
     selectedRating: dcStringFuse,
-    justification: `Based on PV String Isc (${stringIscMax}A) × 1.25 (Continuous load multiplier) × 1.25 (Irradiance enhancement safety factor) = ${rawPvFuseRating.toFixed(2)}A target. Sized to closest standard gPV fuse.`
+    nearestStandardRating: `${pvFuseRating}A`,
+    codeStandard: 'NEC 690.8 / IEC 60269-6',
+    justification: `Isc ${stringIscMax.toFixed(1)}A × 1.25 × 1.25 = ${rawPvFuseRating.toFixed(1)}A. Next available IEC standard rating selected.`
   });
 
-  // 2. PV DC Switch Isolator Sizing
-  // Rating must be > Maximum PV Voltage and Current must be > Maximum PV Current (String Isc * 1.25)
-  const dcIsolatorVoltage = stringVocMax > 500 ? 1000 : 500;
-  const dcIsolatorCurrentCalculated = stringIscMax * 1.25;
-  const standardDCIsolators = [16, 25, 32, 40, 63];
-  let selectedDcIsolatorCurrent = standardDCIsolators[0];
-  for (const rating of standardDCIsolators) {
-    if (dcIsolatorCurrentCalculated <= rating) {
-      selectedDcIsolatorCurrent = rating;
-      break;
-    }
-    selectedDcIsolatorCurrent = rating;
-  }
-  const dcStringIsolator = `${selectedDcIsolatorCurrent}A ${dcIsolatorVoltage}V DC 4-Pole Rotary Isolator Switch`;
+  const dcStringIsolator = `${Math.max(pvFuseRating, 16)}A 1000V DC Load-Break Isolator`;
   details.push({
     device: 'PV DC Switch Isolator',
     calculatedCurrentA: parseFloat(stringIscMax.toFixed(2)),
+    requiredCurrentA: parseFloat((stringIscMax * 1.25).toFixed(2)),
     safetyFactor: 1.25,
     selectedRating: dcStringIsolator,
-    justification: `Sized with 25% safety margin on maximum string Isc (${stringIscMax}A) and rated for worst-case cold open-circuit voltage String Voc (${stringVocMax}V).`
+    nearestStandardRating: `${Math.max(pvFuseRating, 16)}A`,
+    codeStandard: 'IEC 60947-3',
+    justification: 'Provides safe manual disconnection of the PV array under load for maintenance and isolation.'
   });
 
-  // 3. DC Surge Protection Device (SPD)
-  let spdVoltage = 1000;
-  if (stringVocMax <= 150) spdVoltage = 150;
-  else if (stringVocMax <= 500) spdVoltage = 500;
-  const dcStringSpd = `Type II DC Surge Protection Device (SPD) Rated ${spdVoltage}V DC`;
+  const dcStringSpd = `Type II 40kA DC SPD (${Math.ceil(stringVocMax / 100) * 100}V Uc)`;
   details.push({
-    device: 'PV DC Surge Protection',
+    device: 'PV DC Surge Protection (SPD)',
     calculatedCurrentA: 0,
+    requiredCurrentA: 0,
     safetyFactor: 1.0,
     selectedRating: dcStringSpd,
-    justification: `Type II surge protection to clamp overvoltages and lightning induced surges up to ${spdVoltage}V DC.`
+    nearestStandardRating: 'Type II 40kA',
+    codeStandard: 'IEC 61643-31',
+    justification: `Selected for string Voc ${stringVocMax}V cold-weather maximum. Protects inverter MPPT inputs from transient overvoltage.`
   });
 
-  // 4. Battery Overcurrent Fuse and Breaker Sizing
-  // Battery Current = Inverter Power / Battery Voltage
-  const maxInverterDcCurrent = inverterPowerW / batteryVoltageNum;
+  const maxInverterDcCurrent = inverterPowerW / (batteryVoltageNum * 0.96);
   const recommendedBatteryBreakerRating = maxInverterDcCurrent * 1.25;
-
-  const standardBatteryBreakers = [40, 50, 63, 80, 100, 125, 160, 200, 250, 300];
+  const standardBatteryBreakers = [63, 80, 100, 125, 160, 200, 250, 315, 400];
   let selectedBatteryBreaker = standardBatteryBreakers[0];
   for (const rating of standardBatteryBreakers) {
     if (recommendedBatteryBreakerRating <= rating) {
@@ -110,24 +102,28 @@ export function sizeProtectionDevices(
   details.push({
     device: 'Battery Overcurrent Fuse',
     calculatedCurrentA: parseFloat(maxInverterDcCurrent.toFixed(2)),
+    requiredCurrentA: parseFloat(recommendedBatteryBreakerRating.toFixed(2)),
     safetyFactor: 1.25,
     selectedRating: batteryFuse,
-    justification: `Sized for max DC battery draw from inverter (${maxInverterDcCurrent.toFixed(1)}A) × 125% continuous rating factor = ${recommendedBatteryBreakerRating.toFixed(1)}A. Employs ultra-fast NH00 semiconductor response.`
+    nearestStandardRating: `${selectedBatteryBreaker}A`,
+    codeStandard: 'DIN NH00 / IEC 60269',
+    justification: `Battery continuous draw ${maxInverterDcCurrent.toFixed(1)}A × 1.25 = ${recommendedBatteryBreakerRating.toFixed(1)}A. Next standard NH00 rating selected.`
   });
 
   const batteryBreaker = `${selectedBatteryBreaker}A 2-Pole High-Capacity DC MCB`;
   details.push({
     device: 'Battery String MCB / Isolator',
     calculatedCurrentA: parseFloat(maxInverterDcCurrent.toFixed(2)),
+    requiredCurrentA: parseFloat(recommendedBatteryBreakerRating.toFixed(2)),
     safetyFactor: 1.25,
     selectedRating: batteryBreaker,
-    justification: `Sized for inverter maximum discharge current with 25% overhead. Provides thermal-magnetic overload protection and physical DC isolation.`
+    nearestStandardRating: `${selectedBatteryBreaker}A`,
+    codeStandard: 'IEC 60947-2 (DC)',
+    justification: 'Provides thermal-magnetic overload protection and lockable DC isolation of the battery bank.'
   });
 
-  // 5. AC Output Sizing (Assuming single-phase 230V AC output, power factor 1.0)
   const maxAcOutputCurrent = inverterPowerW / 230;
   const recommendedAcBreakerRating = maxAcOutputCurrent * 1.25;
-
   const standardAcBreakers = [10, 16, 20, 25, 32, 40, 50, 63, 80, 100];
   let selectedAcBreaker = standardAcBreakers[0];
   for (const rating of standardAcBreakers) {
@@ -140,28 +136,28 @@ export function sizeProtectionDevices(
 
   const acOutputBreaker = `${selectedAcBreaker}A 230V AC Double-Pole MCB Class C`;
   details.push({
-    device: 'Inverter AC MCB',
+    device: 'Inverter AC Output MCB',
     calculatedCurrentA: parseFloat(maxAcOutputCurrent.toFixed(2)),
+    requiredCurrentA: parseFloat(recommendedAcBreakerRating.toFixed(2)),
     safetyFactor: 1.25,
     selectedRating: acOutputBreaker,
-    justification: `Sized based on AC maximum power output current (${maxAcOutputCurrent.toFixed(1)}A) × 125% safety overhead = ${recommendedAcBreakerRating.toFixed(1)}A. Class C trip curve handles high initial reactive loads.`
+    nearestStandardRating: `${selectedAcBreaker}A`,
+    codeStandard: 'IEC 60898 / IEC 60947-2',
+    justification: `AC output ${maxAcOutputCurrent.toFixed(1)}A × 1.25 = ${recommendedAcBreakerRating.toFixed(1)}A. Next standard Class C MCB rating selected.`
   });
 
-  // 6. AC Residual Leakage Breaker (RCD)
-  // Automatically recommend 30mA for residential or 100mA for commercial applications
   const leakageCurrentRating = isCommercial ? '100mA' : '30mA';
   const acRcdBreaker = `${selectedAcBreaker}A Double-Pole AC RCD, ${leakageCurrentRating} Type A`;
   details.push({
-    device: 'AC Residual Leakage (RCD)',
+    device: 'AC Residual Current Device (RCD)',
     calculatedCurrentA: parseFloat(maxAcOutputCurrent.toFixed(2)),
+    requiredCurrentA: parseFloat(maxAcOutputCurrent.toFixed(2)),
     safetyFactor: 1.0,
     selectedRating: acRcdBreaker,
-    justification: `Provides critical personnel electrocution and earth fault fire protection. Sized at ${leakageCurrentRating} threshold based on project classification.`
+    nearestStandardRating: `${leakageCurrentRating} Type A`,
+    codeStandard: 'IEC 61008 / IEC 61009',
+    justification: `${leakageCurrentRating} Type A RCD selected for ${isCommercial ? 'commercial' : 'residential'} personnel and earth-fault protection.`
   });
-
-  // 7. Grounding and Enclosure Specs
-  const earthElectrode = `16mm x 1.2m Copper-Clad Steel Earth Rod`;
-  const distributionBoard = `IP65 Weatherproof Polycarbonate Box with DIN rail`;
 
   return {
     dcStringFuse,
@@ -171,14 +167,16 @@ export function sizeProtectionDevices(
     batteryBreaker,
     acOutputBreaker,
     acRcdBreaker,
-    earthElectrode,
-    distributionBoard,
+    earthElectrode: `16mm x 1.2m Copper-Clad Steel Earth Rod`,
+    distributionBoard: `IP65 Weatherproof Polycarbonate Box with DIN rail`,
     deviceDetails: details,
     calculationsRaw: {
       maxInverterDcCurrent: parseFloat(maxInverterDcCurrent.toFixed(1)),
       recommendedBatteryBreakerRating: parseFloat(recommendedBatteryBreakerRating.toFixed(1)),
+      selectedBatteryBreakerRating: selectedBatteryBreaker,
       maxAcOutputCurrent: parseFloat(maxAcOutputCurrent.toFixed(1)),
-      recommendedAcBreakerRating: parseFloat(recommendedAcBreakerRating.toFixed(1))
+      recommendedAcBreakerRating: parseFloat(recommendedAcBreakerRating.toFixed(1)),
+      selectedAcBreakerRating: selectedAcBreaker
     }
   };
 }
