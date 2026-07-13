@@ -54,25 +54,27 @@ async function sendContactEmail(payload) {
     ['Budget', payload.budget || '-']
   ];
 
-  const htmlbody = `
-    <div style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.5">
-      <h2 style="color:#123A63;margin:0 0 12px">New VoltSolar contact inquiry</h2>
-      <p style="margin:0 0 16px;color:#475569">Submitted from the website contact form.</p>
-      <table cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:640px">
-        ${rows
-          .map(
-            ([label, value]) => `
-          <tr>
-            <td style="border:1px solid #e2e8f0;background:#f8fafc;font-weight:700;width:160px">${escapeHtml(label)}</td>
-            <td style="border:1px solid #e2e8f0">${escapeHtml(value)}</td>
-          </tr>`
-          )
-          .join('')}
-      </table>
-      <h3 style="margin:20px 0 8px;color:#123A63">Project summary</h3>
-      <p style="white-space:pre-wrap;margin:0;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px">${escapeHtml(payload.summary)}</p>
-    </div>
-  `;
+  const htmlbody =
+    '<div style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.5">' +
+    '<h2 style="color:#123A63;margin:0 0 12px">New VoltSolar contact inquiry</h2>' +
+    '<p style="margin:0 0 16px;color:#475569">Submitted from the website contact form.</p>' +
+    '<table cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:640px">' +
+    rows
+      .map(function (row) {
+        return (
+          '<tr><td style="border:1px solid #e2e8f0;background:#f8fafc;font-weight:700;width:160px">' +
+          escapeHtml(row[0]) +
+          '</td><td style="border:1px solid #e2e8f0">' +
+          escapeHtml(row[1]) +
+          '</td></tr>'
+        );
+      })
+      .join('') +
+    '</table>' +
+    '<h3 style="margin:20px 0 8px;color:#123A63">Project summary</h3>' +
+    '<p style="white-space:pre-wrap;margin:0;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px">' +
+    escapeHtml(payload.summary) +
+    '</p></div>';
 
   const response = await fetch(apiUrl, {
     method: 'POST',
@@ -85,29 +87,30 @@ async function sendContactEmail(payload) {
       from: { address: fromEmail, name: fromName },
       to: [{ email_address: { address: toEmail, name: 'VoltSolar Inbox' } }],
       reply_to: [{ address: payload.email, name: payload.fullName }],
-      subject: `[VoltSolar] ${payload.intent} - ${payload.fullName}`,
-      htmlbody
+      subject: '[VoltSolar] ' + payload.intent + ' - ' + payload.fullName,
+      htmlbody: htmlbody
     })
   });
 
   if (!response.ok) {
-    const detail = await response.text().catch(() => '');
+    const detail = await response.text().catch(function () {
+      return '';
+    });
     console.error('ZeptoMail error:', response.status, detail);
-    let zeptoMessage = 'ZeptoMail rejected the email. Check token, from-address, and region.';
+    var zeptoMessage = 'ZeptoMail rejected the email. Check token, from-address, and region.';
     try {
-      const parsed = JSON.parse(detail);
-      zeptoMessage =
-        (parsed.error && parsed.error.details && parsed.error.details[0] && parsed.error.details[0].message) ||
-        (parsed.error && parsed.error.message) ||
-        zeptoMessage;
-    } catch (_) {
-      // keep default
-    }
+      var parsed = JSON.parse(detail);
+      if (parsed.error && parsed.error.details && parsed.error.details[0] && parsed.error.details[0].message) {
+        zeptoMessage = parsed.error.details[0].message;
+      } else if (parsed.error && parsed.error.message) {
+        zeptoMessage = parsed.error.message;
+      }
+    } catch (_) {}
     throw new Error(zeptoMessage);
   }
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -121,8 +124,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body;
-    const validated = validateContactPayload(body);
+    var body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body;
+    var validated = validateContactPayload(body);
     if (typeof validated === 'string') {
       return res.status(400).json({ error: validated });
     }
@@ -131,7 +134,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error('Contact API error:', err);
-    const message = err && err.message ? err.message : 'Could not send your message. Please try again.';
+    var message = err && err.message ? err.message : 'Could not send your message. Please try again.';
     return res.status(500).json({ error: message });
   }
-}
+};
