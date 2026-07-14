@@ -10,7 +10,7 @@ interface DashboardPageProps {
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, onEditProject }) => {
-  const { currentUser, projects, duplicateProject, deleteProject } = useApp();
+  const { currentUser, projects, duplicateProject } = useApp();
 
   // Stats calculation
   const totalProjects = projects.length;
@@ -27,6 +27,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, o
   };
 
   const recentProjects = projects.slice(0, 3);
+
+  const handleDuplicate = async (id: string) => {
+    try {
+      await duplicateProject(id);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Could not duplicate this project.');
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -149,7 +157,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, o
                     </button>
                     <button
                       id={`recent-dup-${p.id}`}
-                      onClick={() => duplicateProject(p.id)}
+                      onClick={() => void handleDuplicate(p.id)}
                       className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg transition-colors"
                       title="Duplicate"
                     >

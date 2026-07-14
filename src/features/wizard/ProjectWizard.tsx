@@ -51,6 +51,7 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
   // Step 7: Solar Panels
   const [panelSize, setPanelSize] = useState<number>(550);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [isSavingProject, setIsSavingProject] = useState(false);
   const reportRef = useRef<HTMLDivElement>(null);
 
   const reportIssuedAt = useMemo(() => new Date(), []);
@@ -221,7 +222,8 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
     }
   };
 
-  const handleSaveProjectDesign = () => {
+  const handleSaveProjectDesign = async () => {
+    if (isSavingProject) return;
     const actualBackupHours = isCustomHours ? (parseInt(customHours, 10) || 8) : backupHours;
     const finalCalcs = runActiveCalculations();
 
@@ -241,15 +243,27 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       calculations: finalCalcs
     };
 
-    if (projectToEdit) {
-      updateProject({
-        ...projectToEdit,
-        ...projectData
-      });
-    } else {
-      addProject(projectData);
+    setIsSavingProject(true);
+    try {
+      if (projectToEdit) {
+        await updateProject({
+          ...projectToEdit,
+          ...projectData
+        });
+      } else {
+        await addProject(projectData);
+      }
+      onClose();
+    } catch (err) {
+      console.error('Project save failed:', err);
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Could not save this project. Please try again.';
+      window.alert(message);
+    } finally {
+      setIsSavingProject(false);
     }
-    onClose();
   };
 
   const handleDownloadPdf = async () => {
@@ -260,7 +274,11 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       await exportReportPdf(reportRef.current, `${name}-VoltSolar-Report`);
     } catch (err) {
       console.error('PDF export failed:', err);
-      window.alert('Could not download the PDF. Please try again or use Print.');
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Could not download the PDF. Please try again or use Print → Save as PDF.';
+      window.alert(message);
     } finally {
       setIsDownloadingPdf(false);
     }
@@ -1090,10 +1108,16 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
               <button
                 id="wiz-final-save-btn"
-                onClick={handleSaveProjectDesign}
-                className="px-8 py-3.5 bg-[#156DB7] hover:bg-[#0F5288] text-white font-bold text-xs rounded-xl shadow-md shadow-[#156DB7]/10 hover:shadow-lg transition-all text-center"
+                type="button"
+                disabled={isSavingProject}
+                onClick={() => void handleSaveProjectDesign()}
+                className="px-8 py-3.5 bg-[#156DB7] hover:bg-[#0F5288] disabled:opacity-60 text-white font-bold text-xs rounded-xl shadow-md shadow-[#156DB7]/10 hover:shadow-lg transition-all text-center"
               >
-                {projectToEdit ? 'Save Changes & Close Document' : 'Save Sizing Project Design'}
+                {isSavingProject
+                  ? 'Saving to cloud…'
+                  : projectToEdit
+                    ? 'Save Changes & Close Document'
+                    : 'Save Sizing Project Design'}
               </button>
             </div>
           </motion.div>

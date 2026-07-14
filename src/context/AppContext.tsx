@@ -16,10 +16,10 @@ interface AppContextType {
     password?: string
   ) => Promise<boolean>;
   logout: () => void;
-  addProject: (project: Omit<Project, 'id' | 'userId' | 'createdAt'>) => Project;
-  updateProject: (project: Project) => void;
-  deleteProject: (id: string) => void;
-  duplicateProject: (id: string) => void;
+  addProject: (project: Omit<Project, 'id' | 'userId' | 'createdAt'>) => Promise<Project>;
+  updateProject: (project: Project) => Promise<void>;
+  deleteProject: (id: string) => Promise<void>;
+  duplicateProject: (id: string) => Promise<void>;
   updateProfile: (profile: Partial<UserProfile>) => void;
   activeProjectId: string | null;
   setActiveProjectId: (id: string | null) => void;
@@ -64,7 +64,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           localStorage.setItem('voltsolar_user', JSON.stringify(finalUser));
 
           if (!freshProfile) {
-            await supabaseApi.saveProfile(finalUser);
+            try {
+              await supabaseApi.saveProfile(finalUser);
+            } catch (err) {
+              console.warn('Could not create profile on session restore:', err);
+            }
           }
 
           const freshProjects = await supabaseApi.getProjects(session.user.id);
@@ -97,6 +101,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const finalUser = freshProfile || profileFromSessionUser(session.user);
         setCurrentUser(finalUser);
         localStorage.setItem('voltsolar_user', JSON.stringify(finalUser));
+
+        // Profile row is required (projects.user_id FK) — create it if missing
+        if (!freshProfile) {
+          try {
+            await supabaseApi.saveProfile(finalUser);
+          } catch (err) {
+            console.warn('Could not create profile on auth change:', err);
+          }
+        }
 
         const freshProjects = await supabaseApi.getProjects(session.user.id);
         if (freshProjects) {
@@ -139,7 +152,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('voltsolar_user', JSON.stringify(finalUser));
 
     if (!profile) {
-      await supabaseApi.saveProfile(finalUser);
+      try {
+        await supabaseApi.saveProfile(finalUser);
+      } catch (err) {
+        console.warn('Could not create profile on login:', err);
+      }
     }
 
     const freshProjects = await supabaseApi.getProjects(data.user.id);
@@ -177,6 +194,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (error) throw error;
     if (!data.user) throw new Error('Could not create account.');
 
+    // Email confirmation may leave no session — RLS requires an authenticated JWT
+    if (!data.session) {
+      throw new Error(
+        'Account created. Please confirm your email (if required), then log in before saving projects.'
+      );
+    }
+
     const newUser: UserProfile = {
       id: data.user.id,
       fullName,
@@ -186,12 +210,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString()
     };
 
-    await supabaseApi.saveProfile(newUser);
+    try {
+      await supabaseApi.saveProfile(newUser);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      throw new Error(
+        `Account created, but profile sync failed (${detail}). Please log out, log back in, and try again.`
+      );
+    }
+
     setCurrentUser(newUser);
     localStorage.setItem('voltsolar_user', JSON.stringify(newUser));
     setProjects([]);
     localStorage.setItem('voltsolar_projects', JSON.stringify([]));
     return true;
+  };
+
+  const requireSessionUserId = async (): Promise<string> => {
+    const {
+      data: { session }
+    } = await supabase.auth.getSession();
+    if (!session?.user?.id) {
+      throw new Error('Your session expired. Please log in again to save projects.');
+    }
+    return session.user.id;
+  };
+
+  const ensureCloudProfile = async (userId: string) => {
+    const profile: UserProfile = currentUser
+      ? { ...currentUser, id: userId }
+      : {
+          id: userId,
+          fullName: 'Solar Installer',
+          companyName: 'My Company',
+          email: '',
+          phone: '',
+          createdAt: new Date().toISOString()
+        };
+
+    try {
+      await supabaseApi.saveProfile(profile);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      throw new Error(
+        `Could not sync your profile to the cloud (${detail}). Project save was blocked. Try logging out and back in.`
+      );
+    }
   };
 
   const logout = async () => {
@@ -206,53 +270,99 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.removeItem('voltsolar_projects');
   };
 
-  const addProject = (projectData: Omit<Project, 'id' | 'userId' | 'createdAt'>): Project => {
+  const addProject = async (
+    projectData: Omit<Project, 'id' | 'userId' | 'createdAt'>
+  ): Promise<Project> => {
+    const userId = await requireSessionUserId();
+    await ensureCloudProfile(userId);
+
     const newProject: Project = {
       ...projectData,
       id: 'prj-' + Math.random().toString(36).substr(2, 9),
-      userId: currentUser?.id || 'guest',
+      userId,
       createdAt: new Date().toISOString()
     };
+
+    try {
+      await supabaseApi.saveProject(newProject);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      throw new Error(
+        `Could not save this project to the cloud (${detail}). Check your connection and try again.`
+      );
+    }
 
     const updated = [newProject, ...projects];
     setProjects(updated);
     localStorage.setItem('voltsolar_projects', JSON.stringify(updated));
-    void supabaseApi.saveProject(newProject);
     return newProject;
   };
 
-  const updateProject = (updatedProject: Project) => {
-    const updated = projects.map(p => (p.id === updatedProject.id ? updatedProject : p));
+  const updateProject = async (updatedProject: Project): Promise<void> => {
+    const userId = await requireSessionUserId();
+    await ensureCloudProfile(userId);
+
+    const projectToSave: Project = {
+      ...updatedProject,
+      userId
+    };
+
+    try {
+      await supabaseApi.saveProject(projectToSave);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      throw new Error(
+        `Could not update this project in the cloud (${detail}). Check your connection and try again.`
+      );
+    }
+
+    const updated = projects.map(p => (p.id === projectToSave.id ? projectToSave : p));
     setProjects(updated);
     localStorage.setItem('voltsolar_projects', JSON.stringify(updated));
-    void supabaseApi.saveProject(updatedProject);
   };
 
-  const deleteProject = (id: string) => {
+  const deleteProject = async (id: string): Promise<void> => {
+    await requireSessionUserId();
+    try {
+      await supabaseApi.deleteProject(id);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      throw new Error(`Could not delete this project from the cloud (${detail}).`);
+    }
+
     const updated = projects.filter(p => p.id !== id);
     setProjects(updated);
     localStorage.setItem('voltsolar_projects', JSON.stringify(updated));
     if (activeProjectId === id) {
       setActiveProjectId(null);
     }
-    void supabaseApi.deleteProject(id);
   };
 
-  const duplicateProject = (id: string) => {
+  const duplicateProject = async (id: string): Promise<void> => {
     const source = projects.find(p => p.id === id);
     if (!source) return;
+
+    const userId = await requireSessionUserId();
+    await ensureCloudProfile(userId);
 
     const duplicated: Project = {
       ...source,
       id: 'prj-' + Math.random().toString(36).substr(2, 9),
+      userId,
       projectName: `${source.projectName} (Copy)`,
       createdAt: new Date().toISOString()
     };
 
+    try {
+      await supabaseApi.saveProject(duplicated);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      throw new Error(`Could not duplicate this project in the cloud (${detail}).`);
+    }
+
     const updated = [duplicated, ...projects];
     setProjects(updated);
     localStorage.setItem('voltsolar_projects', JSON.stringify(updated));
-    void supabaseApi.saveProject(duplicated);
   };
 
   const updateProfile = (profileUpdate: Partial<UserProfile>) => {
@@ -260,7 +370,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedUser = { ...currentUser, ...profileUpdate };
     setCurrentUser(updatedUser);
     localStorage.setItem('voltsolar_user', JSON.stringify(updatedUser));
-    void supabaseApi.saveProfile(updatedUser);
+    void supabaseApi.saveProfile(updatedUser).catch(err => {
+      console.warn('Profile update sync failed:', err);
+    });
   };
 
   return (

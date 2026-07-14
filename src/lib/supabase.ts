@@ -85,30 +85,24 @@ export const supabaseApi = {
   /**
    * Save or Update User Profile
    */
-  async saveProfile(profile: UserProfile): Promise<boolean> {
-    try {
-      const payload = {
-        id: profile.id,
-        full_name: profile.fullName,
-        company_name: profile.companyName,
-        email: profile.email,
-        phone: profile.phone,
-        avatar_url: profile.avatarUrl || '',
-        created_at: profile.createdAt,
-      };
+  async saveProfile(profile: UserProfile): Promise<void> {
+    const payload = {
+      id: profile.id,
+      full_name: profile.fullName,
+      company_name: profile.companyName,
+      email: profile.email,
+      phone: profile.phone,
+      avatar_url: profile.avatarUrl || '',
+      created_at: profile.createdAt,
+    };
 
-      const { error } = await supabase
-        .from('profiles')
-        .upsert(payload, { onConflict: 'id' });
+    const { error } = await supabase
+      .from('profiles')
+      .upsert(payload, { onConflict: 'id' });
 
-      if (error) {
-        console.warn('Supabase saveProfile warning:', error.message);
-        return false;
-      }
-      return true;
-    } catch (err) {
-      console.warn('Supabase saveProfile failed:', err);
-      return false;
+    if (error) {
+      console.warn('Supabase saveProfile warning:', error.message, error.code, error.details);
+      throw new Error(error.message);
     }
   },
 
@@ -155,60 +149,48 @@ export const supabaseApi = {
   /**
    * Save or Update a Project
    */
-  async saveProject(project: Project): Promise<boolean> {
-    try {
-      const payload = {
-        id: project.id,
-        user_id: project.userId,
-        project_name: project.projectName,
-        client_name: project.clientName,
-        phone: project.phone,
-        email: project.email,
-        location: project.location,
-        project_type: project.projectType,
-        backup_hours: project.backupHours,
-        battery_type: project.batteryType,
-        system_voltage: project.systemVoltage,
-        inverter_type: project.inverterType,
-        panel_size: project.panelSize,
-        created_at: project.createdAt,
-        appliances: project.appliances,
-        calculations: project.calculations || null,
-      };
+  async saveProject(project: Project): Promise<void> {
+    const payload = {
+      id: project.id,
+      user_id: project.userId,
+      project_name: project.projectName,
+      client_name: project.clientName,
+      phone: project.phone,
+      email: project.email,
+      location: project.location,
+      project_type: project.projectType,
+      backup_hours: project.backupHours,
+      battery_type: project.batteryType,
+      system_voltage: project.systemVoltage,
+      inverter_type: project.inverterType,
+      panel_size: project.panelSize,
+      created_at: project.createdAt,
+      appliances: project.appliances,
+      calculations: project.calculations || null,
+    };
 
-      const { error } = await supabase
-        .from('projects')
-        .upsert(payload, { onConflict: 'id' });
+    const { error } = await supabase
+      .from('projects')
+      .upsert(payload, { onConflict: 'id' });
 
-      if (error) {
-        console.warn('Supabase saveProject warning:', error.message);
-        return false;
-      }
-      return true;
-    } catch (err) {
-      console.warn('Supabase saveProject failed:', err);
-      return false;
+    if (error) {
+      console.warn('Supabase saveProject warning:', error.message, error.code, error.details);
+      throw new Error(error.message);
     }
   },
 
   /**
    * Delete a Project
    */
-  async deleteProject(projectId: string): Promise<boolean> {
-    try {
-      const { error } = await supabase
-        .from('projects')
-        .delete()
-        .eq('id', projectId);
+  async deleteProject(projectId: string): Promise<void> {
+    const { error } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', projectId);
 
-      if (error) {
-        console.warn('Supabase deleteProject warning:', error.message);
-        return false;
-      }
-      return true;
-    } catch (err) {
-      console.warn('Supabase deleteProject failed:', err);
-      return false;
+    if (error) {
+      console.warn('Supabase deleteProject warning:', error.message);
+      throw new Error(error.message);
     }
   }
 };
@@ -251,14 +233,18 @@ export const supabaseApi = {
  *
  * -- Authenticated users may only access their own rows:
  * CREATE POLICY "profiles_select_own" ON public.profiles
- *   FOR SELECT TO authenticated USING (auth.uid() = id);
- * CREATE POLICY "profiles_upsert_own" ON public.profiles
- *   FOR ALL TO authenticated USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+ *   FOR SELECT TO authenticated USING (auth.uid()::text = id);
+ * CREATE POLICY "profiles_insert_own" ON public.profiles
+ *   FOR INSERT TO authenticated WITH CHECK (auth.uid()::text = id);
+ * CREATE POLICY "profiles_update_own" ON public.profiles
+ *   FOR UPDATE TO authenticated USING (auth.uid()::text = id) WITH CHECK (auth.uid()::text = id);
  *
  * CREATE POLICY "projects_select_own" ON public.projects
  *   FOR SELECT TO authenticated USING (auth.uid()::text = user_id);
- * CREATE POLICY "projects_write_own" ON public.projects
- *   FOR ALL TO authenticated USING (auth.uid()::text = user_id) WITH CHECK (auth.uid()::text = user_id);
+ * CREATE POLICY "projects_insert_own" ON public.projects
+ *   FOR INSERT TO authenticated WITH CHECK (auth.uid()::text = user_id);
+ * CREATE POLICY "projects_update_own" ON public.projects
+ *   FOR UPDATE TO authenticated USING (auth.uid()::text = user_id) WITH CHECK (auth.uid()::text = user_id);
  *
  * -- Do NOT use open USING (true) policies in production.
  */

@@ -29,9 +29,20 @@ export const ProjectsListPage: React.FC<ProjectsListPageProps> = ({ onEditProjec
     });
   };
 
-  const handleDelete = (id: string, name: string) => {
-    if (confirm(`Are you sure you want to delete the project "${name}"?`)) {
-      deleteProject(id);
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to delete the project "${name}"?`)) return;
+    try {
+      await deleteProject(id);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Could not delete this project.');
+    }
+  };
+
+  const handleDuplicate = async (id: string) => {
+    try {
+      await duplicateProject(id);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Could not duplicate this project.');
     }
   };
 
@@ -146,7 +157,7 @@ export const ProjectsListPage: React.FC<ProjectsListPageProps> = ({ onEditProjec
                         </button>
                         <button
                           id={`plist-dup-${p.id}`}
-                          onClick={() => duplicateProject(p.id)}
+                          onClick={() => void handleDuplicate(p.id)}
                           className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors"
                           title="Duplicate Sizer"
                         >
