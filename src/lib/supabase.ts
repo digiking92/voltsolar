@@ -1,10 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 import { Project, UserProfile } from '../types';
 
-const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL || 'https://cgqiewurebpskemkhlpb.supabase.co';
-const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_xB4xSZvlEWY3pppOoUWkBw_E8Rw5BfN';
+const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL as string | undefined;
+const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. Set them in .env / Vercel.');
+}
+
+export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '');
 
 /**
  * Self-healing, defensive Supabase API operations.
@@ -241,11 +245,20 @@ export const supabaseApi = {
  *     calculations JSONB
  * );
  * 
- * -- Enable Row Level Security (RLS) optionally:
+ * -- Enable Row Level Security (RLS) — required for production:
  * ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
  * ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
- * 
- * -- Open access rules (simplified anonymous access or user-specific permissions):
- * CREATE POLICY "Allow public read/write profiles" ON public.profiles FOR ALL USING (true) WITH CHECK (true);
- * CREATE POLICY "Allow public read/write projects" ON public.projects FOR ALL USING (true) WITH CHECK (true);
+ *
+ * -- Authenticated users may only access their own rows:
+ * CREATE POLICY "profiles_select_own" ON public.profiles
+ *   FOR SELECT TO authenticated USING (auth.uid() = id);
+ * CREATE POLICY "profiles_upsert_own" ON public.profiles
+ *   FOR ALL TO authenticated USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+ *
+ * CREATE POLICY "projects_select_own" ON public.projects
+ *   FOR SELECT TO authenticated USING (auth.uid()::text = user_id);
+ * CREATE POLICY "projects_write_own" ON public.projects
+ *   FOR ALL TO authenticated USING (auth.uid()::text = user_id) WITH CHECK (auth.uid()::text = user_id);
+ *
+ * -- Do NOT use open USING (true) policies in production.
  */

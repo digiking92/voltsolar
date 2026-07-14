@@ -1,6 +1,6 @@
 ﻿import React from 'react';
 import { Building2, CheckCircle2, Cpu, ShieldCheck, Sun, Zap } from 'lucide-react';
-import { PublicChrome, PublicPage } from '../../components/PublicChrome';
+import { PublicChrome, PublicPage, PublicNavigateOptions } from '../../components/PublicChrome';
 import { FadeUp } from '../../components/motion/FadeUp';
 import { DrawArrow } from '../../components/motion/DrawArrow';
 import { MagneticButton } from '../../components/motion/MagneticButton';
@@ -8,7 +8,7 @@ import { AccentBar, BlobField } from '../../components/landing/SectionDecor';
 
 interface AboutPageProps {
   isAuthenticated?: boolean;
-  onNavigate: (page: PublicPage) => void;
+  onNavigate: (page: PublicPage, options?: PublicNavigateOptions) => void;
   onGetStarted: () => void;
   onLogin: () => void;
   onEnterApp?: () => void;

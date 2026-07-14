@@ -18,7 +18,7 @@ interface LandingPageProps {
   onLogin: () => void;
   isAuthenticated?: boolean;
   onEnterApp?: () => void;
-  onNavigate?: (page: PublicPage) => void;
+  onNavigate?: (page: PublicPage, options?: { intent?: string; hash?: string }) => void;
 }
 
 const HERO_SLIDES: HeroSlide[] = [
@@ -50,7 +50,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onLogin,
   isAuthenticated = false,
   onEnterApp,
-  onNavigate = (_page: PublicPage) => undefined
+  onNavigate = (_page: PublicPage, _options?: { intent?: string; hash?: string }) => undefined
 }) => {
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
   const [heroSlide, setHeroSlide] = useState(0);
@@ -245,7 +245,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     href="#how-it-works"
                     className="inline-flex items-center justify-center gap-2 px-6 sm:px-7 py-3.5 rounded-xl border border-white/50 text-white font-semibold hover:bg-white/10 transition-colors backdrop-blur-sm"
                   >
-                    Watch Product Demo
+                    Watch how it works
                   </a>
                 }
               />
@@ -648,18 +648,22 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <p className="text-sm font-semibold text-[#156DB7] mb-3">Pricing</p>
             <AccentBar className="mb-4 mx-auto" />
             <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-[#123A63]">
-              Start Free. Scale When Your Pipeline Demands It.
+              Free during early access. Scale with us as we grow.
             </h2>
+            <p className="mt-4 text-base text-slate-600 leading-relaxed">
+              Billing is not live yet. Every account currently gets the full design workflow at no charge while we
+              finish paid plans.
+            </p>
           </FadeUp>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
             <FadeUp delay={0.05}>
               <div className="feature-card p-7 rounded-2xl border border-slate-200 bg-white h-full">
-                <h3 className="text-lg font-bold text-slate-900">Starter</h3>
+                <h3 className="text-lg font-bold text-slate-900">Early Access</h3>
                 <p className="mt-2 text-3xl font-extrabold text-[#123A63]">$0</p>
-                <p className="text-sm text-slate-500 mt-1">For installers validating the workflow</p>
+                <p className="text-sm text-slate-500 mt-1">Available now for installers and engineers</p>
                 <ul className="mt-6 space-y-2 text-sm text-slate-600">
                   <li>Full sizing engine</li>
-                  <li>Engineering report</li>
+                  <li>Engineering report export</li>
                   <li>Project save and manage</li>
                 </ul>
                 <MagneticButton
@@ -673,25 +677,26 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <FadeUp delay={0.1}>
               <div className="feature-card p-7 rounded-2xl border-2 border-[#156DB7] bg-white shadow-md relative h-full">
                 <span className="absolute -top-3 left-6 text-[10px] font-bold uppercase tracking-wider bg-[#156DB7] text-white px-2.5 py-1 rounded-full">
-                  Popular
+                  Coming soon
                 </span>
                 <h3 className="text-lg font-bold text-slate-900">Professional</h3>
                 <p className="mt-2 text-3xl font-extrabold text-[#123A63]">
-                  $49<span className="text-base font-semibold text-slate-500">/mo</span>
+                  TBA
                 </p>
-                <p className="text-sm text-slate-500 mt-1">For teams quoting weekly</p>
+                <p className="text-sm text-slate-500 mt-1">Planned for teams quoting weekly</p>
                 <ul className="mt-6 space-y-2 text-sm text-slate-600">
-                  <li>Everything in Starter</li>
-                  <li>Priority calculation throughput</li>
-                  <li>Multi-project workspace</li>
-                  <li>Report branding controls</li>
+                  <li>Everything in Early Access</li>
+                  <li>Team workspace (planned)</li>
+                  <li>Report branding (planned)</li>
+                  <li>Priority support (planned)</li>
                 </ul>
-                <MagneticButton
-                  onClick={onGetStarted}
+                <button
+                  type="button"
+                  onClick={() => onNavigate('contact', { intent: 'Professional plan interest' })}
                   className="mt-8 w-full py-3 rounded-xl bg-[#123A63] text-white font-semibold hover:bg-[#0d2d4d]"
                 >
-                  Go Professional
-                </MagneticButton>
+                  Join waitlist
+                </button>
               </div>
             </FadeUp>
             <FadeUp delay={0.15}>
@@ -706,7 +711,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 </ul>
                 <button
                   type="button"
-                  onClick={() => onNavigate('contact')}
+                  onClick={() => onNavigate('contact', { intent: 'Enterprise / Sales' })}
                   className="mt-8 w-full py-3 rounded-xl border border-slate-300 text-slate-800 font-semibold hover:bg-slate-50"
                 >
                   Contact Sales
@@ -732,6 +737,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 <div className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50/50 hover:border-[#156DB7]/35 transition-colors">
                   <button
                     type="button"
+                    id={`faq-trigger-${i}`}
+                    aria-expanded={activeFaq === i}
+                    aria-controls={`faq-panel-${i}`}
                     onClick={() => setActiveFaq(activeFaq === i ? null : i)}
                     className="w-full flex items-center justify-between gap-4 px-5 py-4 text-left"
                   >
@@ -745,6 +753,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   <AnimatePresence>
                     {activeFaq === i && (
                       <motion.div
+                        id={`faq-panel-${i}`}
+                        role="region"
+                        aria-labelledby={`faq-trigger-${i}`}
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: 'auto', opacity: 1 }}
                         exit={{ height: 0, opacity: 0 }}

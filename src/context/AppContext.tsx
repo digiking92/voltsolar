@@ -6,8 +6,15 @@ interface AppContextType {
   currentUser: UserProfile | null;
   projects: Project[];
   isAuthenticated: boolean;
+  authReady: boolean;
   login: (email: string, password?: string) => Promise<boolean>;
-  signup: (fullName: string, companyName: string, email: string, phone: string, password?: string) => Promise<boolean>;
+  signup: (
+    fullName: string,
+    companyName: string,
+    email: string,
+    phone: string,
+    password?: string
+  ) => Promise<boolean>;
   logout: () => void;
   addProject: (project: Omit<Project, 'id' | 'userId' | 'createdAt'>) => Project;
   updateProject: (project: Project) => void;
@@ -20,31 +27,42 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+function profileFromSessionUser(user: {
+  id: string;
+  email?: string | null;
+  created_at?: string;
+  user_metadata?: Record<string, unknown>;
+}): UserProfile {
+  const meta = user.user_metadata || {};
+  return {
+    id: user.id,
+    fullName: String(meta.full_name || user.email?.split('@')[0] || 'Solar Installer'),
+    companyName: String(meta.company_name || 'My Company'),
+    email: user.email || '',
+    phone: String(meta.phone || ''),
+    createdAt: user.created_at || new Date().toISOString()
+  };
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
 
-  // Initialize from LocalStorage and sync with Supabase
   useEffect(() => {
     const initAndSync = async () => {
-      // 1. Check for active Supabase session
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session && session.user) {
+        const {
+          data: { session }
+        } = await supabase.auth.getSession();
+
+        if (session?.user) {
           const freshProfile = await supabaseApi.getProfile(session.user.id);
-          const finalUser: UserProfile = freshProfile || {
-            id: session.user.id,
-            fullName: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Solar Installer',
-            companyName: session.user.user_metadata?.company_name || 'Apex Solar Solutions',
-            email: session.user.email || '',
-            phone: session.user.user_metadata?.phone || '',
-            createdAt: session.user.created_at || new Date().toISOString()
-          };
-          
+          const finalUser = freshProfile || profileFromSessionUser(session.user);
           setCurrentUser(finalUser);
           localStorage.setItem('voltsolar_user', JSON.stringify(finalUser));
-          
+
           if (!freshProfile) {
             await supabaseApi.saveProfile(finalUser);
           }
@@ -54,38 +72,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setProjects(freshProjects);
             localStorage.setItem('voltsolar_projects', JSON.stringify(freshProjects));
           }
-          return;
+        } else {
+          setCurrentUser(null);
+          setProjects([]);
+          localStorage.removeItem('voltsolar_user');
+          localStorage.removeItem('voltsolar_projects');
         }
       } catch (err) {
-        console.warn('Supabase session retrieval failed, falling back to local storage:', err);
-      }
-
-      // 2. Fallback to localStorage if offline/no session
-      const storedUser = localStorage.getItem('voltsolar_user');
-      const storedProjects = localStorage.getItem('voltsolar_projects');
-
-      if (storedUser) {
-        setCurrentUser(JSON.parse(storedUser));
-      }
-      if (storedProjects) {
-        setProjects(JSON.parse(storedProjects));
+        console.warn('Supabase session retrieval failed:', err);
+        setCurrentUser(null);
+        setProjects([]);
+      } finally {
+        setAuthReady(true);
       }
     };
 
-    initAndSync();
+    void initAndSync();
 
-    // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session && session.user) {
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session?.user) {
         const freshProfile = await supabaseApi.getProfile(session.user.id);
-        const finalUser: UserProfile = freshProfile || {
-          id: session.user.id,
-          fullName: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Solar Installer',
-          companyName: session.user.user_metadata?.company_name || 'Apex Solar Solutions',
-          email: session.user.email || '',
-          phone: session.user.user_metadata?.phone || '',
-          createdAt: session.user.created_at || new Date().toISOString()
-        };
+        const finalUser = freshProfile || profileFromSessionUser(session.user);
         setCurrentUser(finalUser);
         localStorage.setItem('voltsolar_user', JSON.stringify(finalUser));
 
@@ -108,118 +117,81 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const login = async (email: string, password?: string): Promise<boolean> => {
-    try {
-      if (password) {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password: password,
-        });
-
-        if (error) throw error;
-
-        if (data.user) {
-          const profile = await supabaseApi.getProfile(data.user.id);
-          const finalUser: UserProfile = profile || {
-            id: data.user.id,
-            fullName: data.user.user_metadata?.full_name || email.split('@')[0],
-            companyName: data.user.user_metadata?.company_name || 'Apex Solar Solutions',
-            email: data.user.email || email,
-            phone: data.user.user_metadata?.phone || '',
-            createdAt: data.user.created_at || new Date().toISOString()
-          };
-
-          setCurrentUser(finalUser);
-          localStorage.setItem('voltsolar_user', JSON.stringify(finalUser));
-
-          if (!profile) {
-            await supabaseApi.saveProfile(finalUser);
-          }
-
-          const freshProjects = await supabaseApi.getProjects(data.user.id);
-          if (freshProjects) {
-            setProjects(freshProjects);
-            localStorage.setItem('voltsolar_projects', JSON.stringify(freshProjects));
-          }
-          return true;
-        }
-      }
-    } catch (err: any) {
-      console.warn('Supabase real login failed. Trying custom offline login fallback:', err);
-      
-      // Check if we can do an offline matching login for testing purposes
-      const storedUser = localStorage.getItem('voltsolar_user');
-      if (storedUser) {
-        const parsed = JSON.parse(storedUser);
-        if (parsed.email.toLowerCase() === email.toLowerCase().trim()) {
-          setCurrentUser(parsed);
-          return true;
-        }
-      }
-      throw new Error(err.message || 'Authentication failed');
+    if (!password) {
+      throw new Error('Password is required.');
     }
-    return false;
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password
+    });
+
+    if (error) throw error;
+    if (!data.user) throw new Error('Authentication failed.');
+
+    const profile = await supabaseApi.getProfile(data.user.id);
+    const finalUser = profile || {
+      ...profileFromSessionUser(data.user),
+      email: data.user.email || email
+    };
+
+    setCurrentUser(finalUser);
+    localStorage.setItem('voltsolar_user', JSON.stringify(finalUser));
+
+    if (!profile) {
+      await supabaseApi.saveProfile(finalUser);
+    }
+
+    const freshProjects = await supabaseApi.getProjects(data.user.id);
+    if (freshProjects) {
+      setProjects(freshProjects);
+      localStorage.setItem('voltsolar_projects', JSON.stringify(freshProjects));
+    }
+
+    return true;
   };
 
-  const signup = async (fullName: string, companyName: string, email: string, phone: string, password?: string): Promise<boolean> => {
-    try {
-      if (password) {
-        const { data, error } = await supabase.auth.signUp({
-          email: email.trim(),
-          password: password,
-          options: {
-            data: {
-              full_name: fullName,
-              company_name: companyName,
-              phone: phone,
-            }
-          }
-        });
+  const signup = async (
+    fullName: string,
+    companyName: string,
+    email: string,
+    phone: string,
+    password?: string
+  ): Promise<boolean> => {
+    if (!password) {
+      throw new Error('Password is required.');
+    }
 
-        if (error) throw error;
-
-        if (data.user) {
-          const newUser: UserProfile = {
-            id: data.user.id,
-            fullName,
-            companyName,
-            email: email.toLowerCase().trim(),
-            phone,
-            createdAt: new Date().toISOString()
-          };
-
-          // Save profile to database
-          await supabaseApi.saveProfile(newUser);
-
-          setCurrentUser(newUser);
-          localStorage.setItem('voltsolar_user', JSON.stringify(newUser));
-          setProjects([]);
-          localStorage.setItem('voltsolar_projects', JSON.stringify([]));
-          return true;
+    const { data, error } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      options: {
+        data: {
+          full_name: fullName,
+          company_name: companyName,
+          phone
         }
       }
-    } catch (err: any) {
-      console.warn('Supabase real signup failed. Trying local sandbox fallback:', err);
+    });
 
-      // Create fallback sandbox local user
-      const localId = 'usr-' + Math.random().toString(36).substr(2, 9);
-      const mockUser: UserProfile = {
-        id: localId,
-        fullName,
-        companyName,
-        email: email.toLowerCase().trim(),
-        phone,
-        createdAt: new Date().toISOString()
-      };
+    if (error) throw error;
+    if (!data.user) throw new Error('Could not create account.');
 
-      await supabaseApi.saveProfile(mockUser);
+    const newUser: UserProfile = {
+      id: data.user.id,
+      fullName,
+      companyName,
+      email: email.toLowerCase().trim(),
+      phone,
+      createdAt: new Date().toISOString()
+    };
 
-      setCurrentUser(mockUser);
-      localStorage.setItem('voltsolar_user', JSON.stringify(mockUser));
-      setProjects([]);
-      localStorage.setItem('voltsolar_projects', JSON.stringify([]));
-      return true;
-    }
-    return false;
+    await supabaseApi.saveProfile(newUser);
+    setCurrentUser(newUser);
+    localStorage.setItem('voltsolar_user', JSON.stringify(newUser));
+    setProjects([]);
+    localStorage.setItem('voltsolar_projects', JSON.stringify([]));
+    return true;
   };
 
   const logout = async () => {
@@ -245,20 +217,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newProject, ...projects];
     setProjects(updated);
     localStorage.setItem('voltsolar_projects', JSON.stringify(updated));
-
-    // Write to Supabase asynchronously
-    supabaseApi.saveProject(newProject);
-
+    void supabaseApi.saveProject(newProject);
     return newProject;
   };
 
   const updateProject = (updatedProject: Project) => {
-    const updated = projects.map(p => p.id === updatedProject.id ? updatedProject : p);
+    const updated = projects.map(p => (p.id === updatedProject.id ? updatedProject : p));
     setProjects(updated);
     localStorage.setItem('voltsolar_projects', JSON.stringify(updated));
-
-    // Write to Supabase asynchronously
-    supabaseApi.saveProject(updatedProject);
+    void supabaseApi.saveProject(updatedProject);
   };
 
   const deleteProject = (id: string) => {
@@ -268,9 +235,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (activeProjectId === id) {
       setActiveProjectId(null);
     }
-
-    // Write to Supabase asynchronously
-    supabaseApi.deleteProject(id);
+    void supabaseApi.deleteProject(id);
   };
 
   const duplicateProject = (id: string) => {
@@ -287,9 +252,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [duplicated, ...projects];
     setProjects(updated);
     localStorage.setItem('voltsolar_projects', JSON.stringify(updated));
-
-    // Write to Supabase asynchronously
-    supabaseApi.saveProject(duplicated);
+    void supabaseApi.saveProject(duplicated);
   };
 
   const updateProfile = (profileUpdate: Partial<UserProfile>) => {
@@ -297,27 +260,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedUser = { ...currentUser, ...profileUpdate };
     setCurrentUser(updatedUser);
     localStorage.setItem('voltsolar_user', JSON.stringify(updatedUser));
-
-    // Write to Supabase asynchronously
-    supabaseApi.saveProfile(updatedUser);
+    void supabaseApi.saveProfile(updatedUser);
   };
 
   return (
-    <AppContext.Provider value={{
-      currentUser,
-      projects,
-      isAuthenticated: !!currentUser,
-      login,
-      signup,
-      logout,
-      addProject,
-      updateProject,
-      deleteProject,
-      duplicateProject,
-      updateProfile,
-      activeProjectId,
-      setActiveProjectId
-    }}>
+    <AppContext.Provider
+      value={{
+        currentUser,
+        projects,
+        isAuthenticated: !!currentUser,
+        authReady,
+        login,
+        signup,
+        logout,
+        addProject,
+        updateProject,
+        deleteProject,
+        duplicateProject,
+        updateProfile,
+        activeProjectId,
+        setActiveProjectId
+      }}
+    >
       {children}
     </AppContext.Provider>
   );

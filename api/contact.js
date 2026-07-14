@@ -13,8 +13,59 @@ function authHeader(token) {
   return `Zoho-enczapikey ${trimmed}`;
 }
 
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+function getAllowedOrigin(req) {
+  const requestOrigin = req.headers.origin || '';
+  const configured = (process.env.CONTACT_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean);
+
+  const defaults = [
+    'https://voltsolar.learnwithchris.app',
+    'https://voltsolar-dun.vercel.app',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000'
+  ];
+
+  const allowlist = configured.length ? configured : defaults;
+  if (requestOrigin && allowlist.includes(requestOrigin)) {
+    return requestOrigin;
+  }
+  return allowlist[0];
+}
+
+// Simple in-memory rate limit (best-effort on serverless; still blocks burst abuse)
+const rateBuckets = globalThis.__voltsolarContactRate || new Map();
+globalThis.__voltsolarContactRate = rateBuckets;
+
+function checkRateLimit(ip) {
+  const windowMs = 10 * 60 * 1000;
+  const maxHits = 8;
+  const now = Date.now();
+  let entry = rateBuckets.get(ip) || { count: 0, start: now };
+  if (now - entry.start > windowMs) {
+    entry = { count: 0, start: now };
+  }
+  entry.count += 1;
+  rateBuckets.set(ip, entry);
+  return entry.count <= maxHits;
+}
+
 function validateContactPayload(body) {
   if (!body || typeof body !== 'object') return 'Invalid request body.';
+
+  // Honeypot: bots fill hidden fields
+  if (String(body.website || body.companyUrl || '').trim()) {
+    return { honeypot: true };
+  }
 
   const fullName = String(body.fullName || '').trim();
   const email = String(body.email || '').trim();
@@ -30,6 +81,9 @@ function validateContactPayload(body) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return 'Please provide a valid email address.';
   }
+  if (summary.length > 5000 || fullName.length > 120) {
+    return 'Message is too long. Please shorten and try again.';
+  }
 
   return { fullName, email, intent, summary, company, phone, budget };
 }
@@ -42,7 +96,7 @@ async function sendContactEmail(payload) {
   const apiUrl = (process.env.ZEPTOMAIL_API_URL || '').trim() || 'https://api.zeptomail.com/v1.1/email';
 
   if (!token) {
-    throw new Error('ZEPTOMAIL_TOKEN is missing in Vercel environment variables.');
+    throw new Error('Email service is not configured.');
   }
 
   const rows = [
@@ -60,7 +114,7 @@ async function sendContactEmail(payload) {
     '<p style="margin:0 0 16px;color:#475569">Submitted from the website contact form.</p>' +
     '<table cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:640px">' +
     rows
-      .map(function (row) {
+      .map(row => {
         return (
           '<tr><td style="border:1px solid #e2e8f0;background:#f8fafc;font-weight:700;width:160px">' +
           escapeHtml(row[0]) +
@@ -87,31 +141,22 @@ async function sendContactEmail(payload) {
       from: { address: fromEmail, name: fromName },
       to: [{ email_address: { address: toEmail, name: 'VoltSolar Inbox' } }],
       reply_to: [{ address: payload.email, name: payload.fullName }],
-      subject: '[VoltSolar] ' + payload.intent + ' - ' + payload.fullName,
-      htmlbody: htmlbody
+      subject: `[VoltSolar] ${payload.intent} - ${payload.fullName}`,
+      htmlbody
     })
   });
 
   if (!response.ok) {
-    const detail = await response.text().catch(function () {
-      return '';
-    });
+    const detail = await response.text().catch(() => '');
     console.error('ZeptoMail error:', response.status, detail);
-    var zeptoMessage = 'ZeptoMail rejected the email. Check token, from-address, and region.';
-    try {
-      var parsed = JSON.parse(detail);
-      if (parsed.error && parsed.error.details && parsed.error.details[0] && parsed.error.details[0].message) {
-        zeptoMessage = parsed.error.details[0].message;
-      } else if (parsed.error && parsed.error.message) {
-        zeptoMessage = parsed.error.message;
-      }
-    } catch (_) {}
-    throw new Error(zeptoMessage);
+    throw new Error('Could not send your message right now. Please try again later.');
   }
 }
 
-module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+export default async function handler(req, res) {
+  const allowedOrigin = getAllowedOrigin(req);
+  res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+  res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
@@ -124,8 +169,16 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    var body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body;
-    var validated = validateContactPayload(body);
+    const ip = getClientIp(req);
+    if (!checkRateLimit(ip)) {
+      return res.status(429).json({ error: 'Too many requests. Please wait and try again.' });
+    }
+
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body;
+    const validated = validateContactPayload(body);
+    if (validated && validated.honeypot) {
+      return res.status(200).json({ ok: true });
+    }
     if (typeof validated === 'string') {
       return res.status(400).json({ error: validated });
     }
@@ -134,7 +187,8 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error('Contact API error:', err);
-    var message = err && err.message ? err.message : 'Could not send your message. Please try again.';
-    return res.status(500).json({ error: message });
+    return res.status(500).json({
+      error: 'Could not send your message. Please try again or email frohitedigitals@gmail.com.'
+    });
   }
-};
+}

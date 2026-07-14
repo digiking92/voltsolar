@@ -1,6 +1,6 @@
-﻿import React, { useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Cpu, Mail, ShieldCheck, Sun } from 'lucide-react';
-import { PublicChrome, PublicPage } from '../../components/PublicChrome';
+import { PublicChrome, PublicPage, PublicNavigateOptions } from '../../components/PublicChrome';
 import { FadeUp } from '../../components/motion/FadeUp';
 import { DrawArrow } from '../../components/motion/DrawArrow';
 import { MagneticButton } from '../../components/motion/MagneticButton';
@@ -8,7 +8,7 @@ import { AccentBar, BlobField } from '../../components/landing/SectionDecor';
 
 interface ContactPageProps {
   isAuthenticated?: boolean;
-  onNavigate: (page: PublicPage) => void;
+  onNavigate: (page: PublicPage, options?: PublicNavigateOptions) => void;
   onGetStarted: () => void;
   onLogin: () => void;
   onEnterApp?: () => void;
@@ -24,6 +24,8 @@ const SERVICE_OPTIONS = [
   'Website',
   'Mobile Application',
   'Automation',
+  'Professional plan interest',
+  'Enterprise / Sales',
   'Other'
 ];
 
@@ -67,6 +69,10 @@ export const ContactPage: React.FC<ContactPageProps> = ({
   initialIntent = ''
 }) => {
   const [intent, setIntent] = useState(initialIntent);
+
+  useEffect(() => {
+    setIntent(initialIntent);
+  }, [initialIntent]);
   const [submitted, setSubmitted] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -77,7 +83,8 @@ export const ContactPage: React.FC<ContactPageProps> = ({
     phone: '',
     country: '',
     summary: '',
-    budget: ''
+    budget: '',
+    website: ''
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -100,6 +107,7 @@ export const ContactPage: React.FC<ContactPageProps> = ({
           email: form.email.trim(),
           phone: form.phone.trim(),
           intent,
+          website: form.website,
           summary: [
             form.country.trim() ? `Country: ${form.country.trim()}` : '',
             form.summary.trim()
@@ -268,7 +276,7 @@ export const ContactPage: React.FC<ContactPageProps> = ({
             <FadeUp delay={0.05}>
               <form
                 onSubmit={handleSubmit}
-                className="rounded-2xl border-2 border-slate-200 bg-white p-6 sm:p-9 shadow-[0_12px_40px_-24px_rgba(18,58,99,0.35)]"
+                className="relative rounded-2xl border-2 border-slate-200 bg-white p-6 sm:p-9 shadow-[0_12px_40px_-24px_rgba(18,58,99,0.35)]"
                 style={{
                   backgroundImage:
                     'linear-gradient(#fff, #fff), linear-gradient(135deg, #c5d8ea, #d7e4f0 45%, #c8e6b8)',
@@ -388,6 +396,17 @@ export const ContactPage: React.FC<ContactPageProps> = ({
                       onChange={e => setForm({ ...form, budget: e.target.value })}
                       placeholder="Optional - e.g. $5,000 to $20,000"
                       className={inputClass}
+                    />
+                  </div>
+
+                  <div className="absolute -left-[9999px] h-0 w-0 overflow-hidden" aria-hidden="true">
+                    <label htmlFor="contact-website">Website</label>
+                    <input
+                      id="contact-website"
+                      tabIndex={-1}
+                      autoComplete="off"
+                      value={form.website}
+                      onChange={e => setForm({ ...form, website: e.target.value })}
                     />
                   </div>
 
