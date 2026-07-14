@@ -1,6 +1,10 @@
 ﻿import React from 'react';
-import { ArrowRight, Building2, Cpu, Sun, Zap } from 'lucide-react';
+import { Building2, CheckCircle2, Cpu, ShieldCheck, Sun, Zap } from 'lucide-react';
 import { PublicChrome, PublicPage } from '../../components/PublicChrome';
+import { FadeUp } from '../../components/motion/FadeUp';
+import { DrawArrow } from '../../components/motion/DrawArrow';
+import { MagneticButton } from '../../components/motion/MagneticButton';
+import { AccentBar, BlobField } from '../../components/landing/SectionDecor';
 
 interface AboutPageProps {
   isAuthenticated?: boolean;
@@ -17,6 +21,71 @@ export const AboutPage: React.FC<AboutPageProps> = ({
   onLogin,
   onEnterApp
 }) => {
+  const renewable = [
+    'Residential solar systems',
+    'Commercial solar systems',
+    'Industrial solar power plants',
+    'Battery energy storage systems',
+    'Hybrid energy systems',
+    'Grid-tied and off-grid solutions'
+  ];
+
+  const electrical = [
+    'Industrial electrical system design',
+    'Power distribution systems',
+    'Electrical control panel design',
+    'Motor control centers (MCC)',
+    'Variable frequency drive (VFD) systems',
+    'Industrial automation',
+    'PLC and control systems',
+    'Electrical installation supervision',
+    'Commissioning and testing',
+    'Power system troubleshooting'
+  ];
+
+  const software = [
+    'Business software',
+    'Custom web applications',
+    'Enterprise software',
+    'SaaS platforms',
+    'Mobile applications',
+    'Internal business tools',
+    'Automation software',
+    'Engineering software',
+    'Client portals',
+    'API integrations',
+    'AI-powered business applications'
+  ];
+
+  const whyUs = [
+    'Over a decade of engineering experience.',
+    'Cross-disciplinary expertise.',
+    'Industrial-scale problem solving.',
+    'Software built around real engineering workflows.',
+    'Solutions that scale with businesses.'
+  ];
+
+  const pillars = [
+    {
+      title: 'Renewable Energy Engineering',
+      icon: Sun,
+      iconClass: 'bg-[#69BD45] text-[#123A63]',
+      items: renewable
+    },
+    {
+      title: 'Electrical Engineering',
+      icon: Zap,
+      iconClass: 'bg-[#156DB7] text-white',
+      items: electrical
+    },
+    {
+      title: 'Software Engineering',
+      icon: Cpu,
+      iconClass: 'bg-[#123A63] text-white',
+      items: software
+    }
+  ];
+
   return (
     <PublicChrome
       activePage="about"
@@ -26,159 +95,191 @@ export const AboutPage: React.FC<AboutPageProps> = ({
       onLogin={onLogin}
       onEnterApp={onEnterApp}
     >
-      <section className="relative pt-16 pb-20 overflow-hidden border-b border-slate-200 bg-gradient-to-b from-white to-slate-50">
-        <div className="max-w-4xl mx-auto px-6">
-          <p className="text-sm font-semibold text-[#156DB7] mb-3">About Us</p>
-          <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-[#123A63] leading-tight">
-            We design power systems.
-            <br />
-            <span className="text-slate-800">We build the software that scales them.</span>
-          </h1>
-          <p className="mt-6 text-lg text-slate-600 leading-relaxed max-w-3xl">
-            VoltSolar sits at the intersection of field engineering and product craft: a decade of solar,
-            industrial electrical, and controls experience, and a design team that ships software, web,
-            and mobile products for businesses that need more than a brochure site.
-          </p>
+      {/* Hero */}
+      <section className="relative min-h-[58vh] overflow-hidden border-b border-slate-200">
+        <img src="/images/solar-farm-aerial.png" alt="" className="absolute inset-0 h-full w-full object-cover" />
+        <div className="absolute inset-0 bg-gradient-to-b from-[#123A63]/88 via-[#156DB7]/78 to-[#0F5288]/92" />
+        <div className="pointer-events-none absolute -top-16 left-8 h-64 w-64 rounded-full bg-[#69BD45]/25 blur-3xl animate-aurora-a" />
+        <div className="pointer-events-none absolute bottom-0 right-0 h-72 w-72 rounded-full bg-[#69BD45]/20 blur-3xl animate-aurora-b" />
+        <div className="relative z-10 max-w-7xl mx-auto px-6 pt-20 pb-24">
+          <FadeUp className="max-w-3xl mx-auto text-center">
+            <p className="inline-flex rounded-full bg-[#69BD45] px-3 py-1 text-xs font-bold uppercase tracking-wider text-[#123A63] mb-5">
+              About
+            </p>
+            <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-white leading-tight">
+              Engineering Meets Intelligent Software.
+            </h1>
+            <p className="mt-6 text-lg text-white leading-relaxed">
+              VoltSolar exists to bridge the gap between practical engineering experience and intelligent software.
+              We believe engineers should spend less time repeating calculations and more time solving real
+              problems.
+            </p>
+            <div className="mt-8 inline-flex items-center gap-2.5 rounded-2xl border border-white/40 bg-[#0d2d4d]/80 px-4 py-3 backdrop-blur-md">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#69BD45] text-[#123A63]">
+                <ShieldCheck className="h-5 w-5" strokeWidth={2.5} />
+              </span>
+              <span className="text-left">
+                <span className="block text-[10px] font-bold uppercase tracking-widest text-white/80">Built by</span>
+                <span className="block text-sm font-bold text-white">Field engineers, not guesswork</span>
+              </span>
+            </div>
+          </FadeUp>
         </div>
       </section>
 
-      <section className="py-20 bg-white">
-        <div className="max-w-4xl mx-auto px-6">
-          <h2 className="text-2xl sm:text-3xl font-bold text-[#123A63] tracking-tight">
-            Born on the job site. Refined in the product lab.
-          </h2>
-          <div className="mt-6 space-y-4 text-base text-slate-600 leading-relaxed">
-            <p>
-              Before VoltSolar was a platform, it was a problem we lived every week: sizing solar correctly
-              under time pressure, documenting decisions clients could understand, and keeping juniors from
-              publishing unsafe combinations.
+      {/* Story split */}
+      <section className="relative py-20 sm:py-24 bg-white border-b border-slate-100 overflow-hidden">
+        <BlobField variant="soft" />
+        <div className="relative max-w-7xl mx-auto px-6 grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-16 items-center">
+          <FadeUp>
+            <p className="text-sm font-semibold text-[#156DB7] mb-3">Our Story</p>
+            <AccentBar className="mb-4" />
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-[#123A63]">
+              Born on the job site. Refined in software.
+            </h2>
+            <div className="mt-6 space-y-4 text-base sm:text-lg text-slate-700 leading-relaxed">
+              <p>
+                VoltSolar was founded by engineers who spent years designing, troubleshooting, commissioning, and
+                maintaining industrial electrical systems, renewable energy projects, power distribution networks,
+                and automation systems.
+              </p>
+              <p className="font-semibold text-[#123A63]">Throughout those years one challenge remained constant.</p>
+              <p>
+                Solar system sizing was still heavily dependent on manual calculations, spreadsheets, and personal
+                experience.
+              </p>
+              <p>We built VoltSolar to modernize that process.</p>
+              <p>
+                Today, VoltSolar helps engineers and installers produce faster, smarter, and more accurate solar
+                designs backed by engineering validation.
+              </p>
+            </div>
+          </FadeUp>
+          <FadeUp delay={0.1} className="relative">
+            <div className="absolute -inset-4 rounded-[2rem] bg-gradient-to-br from-[#156DB7]/15 to-[#69BD45]/15 blur-xl" />
+            <div className="group relative overflow-hidden rounded-[1.75rem] border border-slate-200 shadow-xl shadow-[#123A63]/10">
+              <img
+                src="/images/field-engineer-laptop.png"
+                alt="Engineer reviewing solar design diagrams on a laptop in the field"
+                className="img-reveal w-full h-[420px] object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#123A63]/75 via-transparent to-transparent" />
+              <div className="absolute bottom-5 left-5 right-5 text-white">
+                <p className="text-xs font-semibold uppercase tracking-wider">
+                  <span className="inline-flex rounded-md bg-[#69BD45] px-2 py-0.5 text-[#123A63]">Real field practice</span>
+                </p>
+                <p className="mt-2 text-sm font-semibold leading-snug">
+                  Every product decision starts with how systems are actually installed and commissioned.
+                </p>
+              </div>
+            </div>
+          </FadeUp>
+        </div>
+      </section>
+
+      {/* Capabilities */}
+      <section className="relative py-20 sm:py-24 bg-slate-50 border-b border-slate-100 overflow-hidden">
+        <BlobField variant="mesh" />
+        <div className="relative max-w-7xl mx-auto px-6">
+          <FadeUp className="max-w-3xl mb-12">
+            <p className="text-sm font-semibold text-[#156DB7] mb-3">Beyond Solar</p>
+            <AccentBar className="mb-4" />
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-[#123A63]">
+              Engineering and Technology Across Industries.
+            </h2>
+            <p className="mt-4 text-base sm:text-lg text-slate-700 leading-relaxed">
+              Our expertise extends far beyond photovoltaic system design. Our engineering and technology teams
+              design and develop solutions across multiple industries, combining electrical engineering with
+              modern software development to solve complex business and industrial challenges.
             </p>
-            <p>
-              We had already spent years designing electrical systems for homes and industry, solar arrays,
-              distribution, control panels, motor installations, and industrial controls. Building VoltSolar
-              was the natural next step: encode that discipline into software other professionals can trust.
-            </p>
-            <p>
-              Today we operate as one practice with two strengths:{' '}
-              <strong className="text-slate-800">power and solar engineering</strong> for the built
-              environment, and <strong className="text-slate-800">digital product engineering</strong> for
-              brands that need purpose-built tools.
-            </p>
+          </FadeUp>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            {pillars.map((pillar, i) => {
+              const Icon = pillar.icon;
+              return (
+                <FadeUp key={pillar.title} delay={i * 0.06}>
+                  <div className="feature-card-shell h-full">
+                    <div className="feature-card-inner h-full p-6 sm:p-7">
+                      <div
+                        className={`feature-card-icon mb-5 flex h-12 w-12 items-center justify-center rounded-xl shadow-sm ${pillar.iconClass}`}
+                      >
+                        <Icon className="h-6 w-6" />
+                      </div>
+                      <h3 className="text-lg font-bold text-[#123A63] mb-4">{pillar.title}</h3>
+                      <ul className="space-y-2.5">
+                        {pillar.items.map(item => (
+                          <li key={item} className="text-sm text-slate-700 flex gap-2.5">
+                            <CheckCircle2 className="w-4 h-4 text-[#156DB7] shrink-0 mt-0.5" />
+                            {item}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </FadeUp>
+              );
+            })}
           </div>
         </div>
       </section>
 
-      <section className="py-20 bg-slate-50 border-y border-slate-200">
-        <div className="max-w-7xl mx-auto px-6">
-          <h2 className="text-2xl sm:text-3xl font-bold text-[#123A63] tracking-tight text-center">
-            Three capabilities. One standard of rigor.
-          </h2>
-          <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="bg-white border border-slate-200 rounded-2xl p-7">
-              <div className="w-11 h-11 rounded-xl bg-amber-500/10 text-amber-600 flex items-center justify-center mb-5">
-                <Sun className="w-5 h-5" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900 mb-3">Solar System Design</h3>
-              <p className="text-sm text-slate-600 leading-relaxed">
-                Residential rooftops. Commercial facilities. Industrial sites. We design solar systems sized
-                to real loads, real autonomy, and real equipment for domestic and industrial sites, with
-                documentation suitable for installers, facility managers, and decision-makers.
-              </p>
+      {/* Why clients */}
+      <section className="relative py-20 bg-white border-b border-slate-100 overflow-hidden">
+        <BlobField variant="dots" className="opacity-25" />
+        <div className="relative max-w-7xl mx-auto px-6">
+          <FadeUp className="mb-10">
+            <div className="flex items-center gap-3 mb-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#156DB7] text-white">
+                <Building2 className="w-5 h-5" />
+              </span>
+              <p className="text-sm font-semibold text-[#156DB7]">Why Clients Work With Us</p>
             </div>
-            <div className="bg-white border border-slate-200 rounded-2xl p-7">
-              <div className="w-11 h-11 rounded-xl bg-[#156DB7]/10 text-[#156DB7] flex items-center justify-center mb-5">
-                <Zap className="w-5 h-5" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900 mb-3">Power Systems & Industrial Electrical</h3>
-              <p className="text-sm text-slate-600 leading-relaxed">
-                Over 10 years designing and supporting power systems, industrial electrical infrastructure,
-                electric design and controls, control panels, and electric motor installations. We understand
-                plants, not just panels.
-              </p>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-2xl p-7">
-              <div className="w-11 h-11 rounded-xl bg-[#69BD45]/10 text-[#69BD45] flex items-center justify-center mb-5">
-                <Cpu className="w-5 h-5" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900 mb-3">Software, Web & Mobile Products</h3>
-              <p className="text-sm text-slate-600 leading-relaxed">
-                Our design and engineering team builds software, websites, web apps, and mobile applications
-                for businesses across industries, from internal operations tools to customer-facing platforms.
-                VoltSolar is proof we ship engineering-grade products.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="py-16 bg-white">
-        <div className="max-w-5xl mx-auto px-6">
-          <h2 className="text-xl font-bold text-[#123A63] text-center mb-8">
-            Experience you can feel in the details.
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm text-slate-700">
-            {[
-              '10+ years in power systems and industrial electrical design',
-              'Solar design for houses, companies, domestic and industrial facilities',
-              'Controls, control panels, and electric motor installation expertise',
-              'Full-stack product delivery: software · websites · web apps · mobile',
-              'Engineering reports aligned to international electrical practice'
-            ].map(item => (
-              <div key={item} className="flex gap-3 items-start bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
-                <Building2 className="w-4 h-4 text-[#156DB7] mt-0.5 shrink-0" />
-                <span>{item}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="py-20 bg-slate-50 border-t border-slate-200">
-        <div className="max-w-4xl mx-auto px-6">
-          <h2 className="text-2xl font-bold text-[#123A63] tracking-tight">Clarity first. Then construction.</h2>
-          <ol className="mt-8 space-y-5">
-            {[
-              { t: 'Discover', d: 'Loads, constraints, commercial goals, users.' },
-              { t: 'Design', d: 'System architecture or product UX, with decisions written down.' },
-              { t: 'Engineer', d: 'Electrical validation or software build with the same intolerance for ambiguity.' },
-              { t: 'Deliver', d: 'Commissionable designs or shippable products, with handover your team can own.' }
-            ].map((step, i) => (
-              <li key={step.t} className="flex gap-4">
-                <span className="w-8 h-8 rounded-full bg-[#123A63] text-white text-sm font-bold flex items-center justify-center shrink-0">
-                  {i + 1}
-                </span>
-                <div>
-                  <p className="font-bold text-slate-900">{step.t}</p>
-                  <p className="text-sm text-slate-600 mt-1">{step.d}</p>
+            <AccentBar className="mb-4" />
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-[#123A63] max-w-3xl">
+              Cross-disciplinary teams with industrial-scale experience.
+            </h2>
+          </FadeUp>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {whyUs.map((item, i) => (
+              <FadeUp key={item} delay={i * 0.05}>
+                <div className="audience-chip h-full flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+                  <CheckCircle2 className="w-5 h-5 text-[#156DB7] shrink-0 mt-0.5" />
+                  <span className="text-sm font-semibold text-[#123A63] leading-snug">{item}</span>
                 </div>
-              </li>
+              </FadeUp>
             ))}
-          </ol>
+          </div>
         </div>
       </section>
 
-      <section className="py-20 bg-[#123A63] text-white">
-        <div className="max-w-4xl mx-auto px-6 text-center">
-          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">
-            Whether you need a solar design or a digital product, start with a conversation.
-          </h2>
-          <div className="mt-8 flex flex-col sm:flex-row gap-4 justify-center">
-            <button
-              type="button"
-              onClick={() => onNavigate('contact')}
-              className="px-7 py-3.5 bg-[#156DB7] hover:bg-[#0F5288] rounded-xl font-semibold inline-flex items-center justify-center gap-2"
-            >
-              Contact Us
-              <ArrowRight className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={onGetStarted}
-              className="px-7 py-3.5 bg-white/10 hover:bg-white/15 border border-white/20 rounded-xl font-semibold"
-            >
-              Explore VoltSolar Software
-            </button>
-          </div>
+      {/* CTA */}
+      <section className="relative overflow-hidden py-20">
+        <img src="/images/industrial-roof-solar.png" alt="" className="absolute inset-0 h-full w-full object-cover" />
+        <div className="absolute inset-0 bg-[#123A63]/85" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(105,189,69,0.25),transparent_50%)]" />
+        <div className="relative max-w-3xl mx-auto px-6 text-center">
+          <FadeUp>
+            <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight">
+              Ready to design with VoltSolar, or talk about a project?
+            </h2>
+            <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+              <MagneticButton
+                onClick={onGetStarted}
+                className="inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-xl bg-white text-[#123A63] font-semibold shadow-lg"
+              >
+                Start Designing Free
+                <DrawArrow className="w-4 h-4" stroke="#123A63" />
+              </MagneticButton>
+              <button
+                type="button"
+                onClick={() => onNavigate('contact')}
+                className="inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-xl border border-white/50 text-white font-semibold hover:bg-white/10"
+              >
+                Contact Us
+              </button>
+            </div>
+          </FadeUp>
         </div>
       </section>
     </PublicChrome>

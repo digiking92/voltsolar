@@ -1,5 +1,6 @@
 import React from 'react';
 import { Sun } from 'lucide-react';
+import { SmoothScroll } from './motion/SmoothScroll';
 
 export type PublicPage = 'home' | 'about' | 'contact';
 
@@ -30,6 +31,7 @@ export const PublicChrome: React.FC<PublicChromeProps> = ({
     }`;
 
   return (
+    <SmoothScroll>
     <div className="min-h-screen bg-slate-50 text-slate-900 selection:bg-[#156DB7]/20 selection:text-[#156DB7]">
       <header className="sticky top-0 z-50 backdrop-blur-md bg-white/80 border-b border-slate-100">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
@@ -53,14 +55,14 @@ export const PublicChrome: React.FC<PublicChromeProps> = ({
           <nav className="hidden lg:flex items-center space-x-7">
             {activePage === 'home' ? (
               <>
-                <a href="#features" className="text-sm font-medium text-slate-600 hover:text-[#156DB7] transition-colors">
+                <a href="#product" className="text-sm font-medium text-slate-600 hover:text-[#156DB7] transition-colors">
                   Product
+                </a>
+                <a href="#features" className="text-sm font-medium text-slate-600 hover:text-[#156DB7] transition-colors">
+                  Features
                 </a>
                 <a href="#how-it-works" className="text-sm font-medium text-slate-600 hover:text-[#156DB7] transition-colors">
                   How It Works
-                </a>
-                <a href="#pricing" className="text-sm font-medium text-slate-600 hover:text-[#156DB7] transition-colors">
-                  Pricing
                 </a>
               </>
             ) : (
@@ -99,7 +101,7 @@ export const PublicChrome: React.FC<PublicChromeProps> = ({
                   onClick={onGetStarted}
                   className="text-sm font-semibold bg-[#156DB7] hover:bg-[#0F5288] text-white px-4 sm:px-5 py-2.5 rounded-xl shadow-sm transition-all"
                 >
-                  Start Designing Free
+                  Get Started
                 </button>
               </>
             )}
@@ -121,7 +123,8 @@ export const PublicChrome: React.FC<PublicChromeProps> = ({
               </span>
             </div>
             <p className="text-sm text-slate-400 leading-relaxed">
-              Engineering software and power systems for homes, industry, and growing brands.
+              Intelligent solar system design for installers, engineers, EPC contractors, and renewable energy
+              professionals.
             </p>
           </div>
 
@@ -139,8 +142,8 @@ export const PublicChrome: React.FC<PublicChromeProps> = ({
                 </a>
               </li>
               <li>
-                <a href="#pricing" onClick={() => onNavigate('home')} className="hover:text-white transition-colors">
-                  Pricing
+                <a href="#how-it-works" onClick={() => onNavigate('home')} className="hover:text-white transition-colors">
+                  How It Works
                 </a>
               </li>
             </ul>
@@ -151,13 +154,19 @@ export const PublicChrome: React.FC<PublicChromeProps> = ({
             <ul className="space-y-2.5 text-sm">
               <li>
                 <button type="button" onClick={() => onNavigate('about')} className="hover:text-white transition-colors">
-                  About Us
+                  About
                 </button>
               </li>
               <li>
                 <button type="button" onClick={() => onNavigate('contact')} className="hover:text-white transition-colors">
                   Contact
                 </button>
+              </li>
+              <li>
+                <span className="text-slate-500">Privacy</span>
+              </li>
+              <li>
+                <span className="text-slate-500">Terms</span>
               </li>
             </ul>
           </div>
@@ -167,12 +176,17 @@ export const PublicChrome: React.FC<PublicChromeProps> = ({
             <ul className="space-y-2.5 text-sm">
               <li>
                 <button type="button" onClick={onGetStarted} className="hover:text-white transition-colors">
-                  Start Designing Free
+                  Create Free Account
+                </button>
+              </li>
+              <li>
+                <button type="button" onClick={onLogin} className="hover:text-white transition-colors">
+                  Log in
                 </button>
               </li>
               <li>
                 <button type="button" onClick={() => onNavigate('contact')} className="hover:text-white transition-colors">
-                  Talk to Our Engineers
+                  Contact Sales
                 </button>
               </li>
             </ul>
@@ -184,5 +198,6 @@ export const PublicChrome: React.FC<PublicChromeProps> = ({
         </div>
       </footer>
     </div>
+    </SmoothScroll>
   );
 };
