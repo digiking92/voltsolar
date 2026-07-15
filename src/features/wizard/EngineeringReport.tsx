@@ -366,9 +366,9 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             reason={`Limited to ${Math.round((calcs.batteryDodUsed || 0.9) * 100)}% DoD (${meta.chemistryLabel}) to protect cycle life and avoid deep discharge.`}
           />
           <ReasonBlock
-            title="Expected Backup"
+            title="Estimated Backup (Based on Selected Load Profile)"
             value={`${(calcs.batteryExpectedBackupHours || backupHours).toFixed(1)} Hours`}
-            reason="Estimated from usable energy after inverter conversion efficiency, based on the customer's average load profile, not a guaranteed continuous full-load runtime."
+            reason={`Calculated from usable battery energy after inverter efficiency, using the entered appliance schedule and your selected ${backupHours}-hour backup target. This is not the runtime if every connected appliance runs at full load simultaneously.`}
           />
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 text-xs">
@@ -410,6 +410,15 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             </p>
           </div>
         </div>
+        <div className="mt-4 p-4 rounded-xl bg-[#F7FAFC] border border-slate-200/80 space-y-2">
+          <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Why this battery bank was selected</p>
+          {meta.selectionJustifications.battery.map(row => (
+            <div key={row.label} className="flex flex-col sm:flex-row sm:gap-3 text-[12px]">
+              <span className="font-semibold text-slate-600 sm:w-[40%] shrink-0">{row.label}</span>
+              <span className="text-slate-800">{row.value}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* PV Array explanation */}
@@ -436,6 +445,15 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           electrically valid string configuration that meets or exceeds this target using commercial panel ratings
           ({panelWpActual} Wp modules, {calcs.panelQuantity} panels, {calcs.panelConfiguration}).
         </p>
+        <div className="mt-4 p-4 rounded-xl bg-[#F7FAFC] border border-slate-200/80 space-y-2 max-w-2xl">
+          <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Why this PV array was selected</p>
+          {meta.selectionJustifications.pv.map(row => (
+            <div key={row.label} className="flex flex-col sm:flex-row sm:gap-3 text-[12px]">
+              <span className="font-semibold text-slate-600 sm:w-[40%] shrink-0">{row.label}</span>
+              <span className="text-slate-800">{row.value}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Inverter explanation */}
@@ -454,7 +472,15 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             <span className="text-[11px] font-semibold text-slate-600 tracking-wide block">Selected Inverter</span>
             <p className="text-base font-extrabold text-slate-800">{calcs.inverterModelRecommended}</p>
             <p className="text-sm font-bold text-[#156DB7]">{calcs.inverterSizeKva} kVA · {meta.topologyLabel}</p>
-            <p className="text-[11px] text-slate-500 leading-relaxed pt-2">{calcs.inverterReason}</p>
+            <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-3">
+              <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Why this inverter was selected</p>
+              {meta.selectionJustifications.inverter.map(row => (
+                <div key={row.label} className="flex flex-col sm:flex-row sm:gap-2 text-[11px] py-1 border-b border-slate-50 last:border-0">
+                  <span className="font-semibold text-slate-600 sm:w-[42%] shrink-0">{row.label}</span>
+                  <span className="text-slate-800">{row.value}</span>
+                </div>
+              ))}
+            </div>
             <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-100 text-[11px] text-slate-600 leading-relaxed space-y-1.5">
               <p className="font-bold text-slate-800">MPPT / charge controller</p>
               {inverterType === 'off_grid' ? (
@@ -580,6 +606,19 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           Layout: {calcs.seriesCount ?? '-'} series × {calcs.parallelCount ?? '-'} parallel ({calcs.panelQuantity} panels).
           Only electrically valid configurations are published.
         </p>
+        {meta.pvMarginNotes.length > 0 && (
+          <div className="mt-4 space-y-2">
+            {meta.pvMarginNotes.map(note => (
+              <div
+                key={note}
+                className="p-3 rounded-xl border border-amber-100 bg-amber-50/50 text-[12px] text-amber-950 leading-relaxed"
+              >
+                <span className="font-bold text-amber-800">Engineering note: </span>
+                {note}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* SLD */}
@@ -601,6 +640,9 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           <ShieldCheck className="w-4 h-4 text-emerald-500 mr-1.5" />
           <span>9. Protection Device Schedule</span>
         </h3>
+        <p className="text-[12px] text-slate-600 mb-3 leading-relaxed max-w-3xl">
+          {meta.selectionJustifications.protection}
+        </p>
         <div className="overflow-x-auto border border-slate-100 rounded-2xl bg-white">
           <table className="w-full text-left text-xs text-slate-700">
             <thead>
@@ -649,37 +691,49 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           <Zap className="w-4 h-4 text-[#156DB7] mr-1.5" />
           <span>10. Cable Engineering Schedule</span>
         </h3>
+        <p className="text-[12px] text-slate-600 mb-3 leading-relaxed max-w-3xl">
+          {calcs.cableSizing?.cableLengthsAssumed !== false
+            ? 'Cable lengths use standard residential assumptions (PV 20 m, battery 2 m, AC 10 m) because site-specific distances were not entered. Enter optional cable run lengths on the battery step to recalculate voltage drop for this site.'
+            : 'Cable sizes and voltage drop were recalculated using the site-specific run lengths entered for this project.'}
+        </p>
         <div className="overflow-x-auto border border-slate-100 rounded-2xl">
           <table className="w-full text-left text-xs text-slate-700">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100 text-[11px] font-semibold text-slate-600 tracking-wide">
-                <th className="px-4 py-3">Cable Run</th>
-                <th className="px-4 py-3">Specification</th>
-                <th className="px-4 py-3">Required Current</th>
-                <th className="px-4 py-3">Cable Ampacity</th>
-                <th className="px-4 py-3">Utilization</th>
-                <th className="px-4 py-3">Voltage Drop</th>
-                <th className="px-4 py-3">Limit</th>
-                <th className="px-4 py-3">Status</th>
+                <th className="px-3 py-3">Cable Run</th>
+                <th className="px-3 py-3">Current (A)</th>
+                <th className="px-3 py-3">Length (m)</th>
+                <th className="px-3 py-3">Allowable Drop</th>
+                <th className="px-3 py-3">Selected Size</th>
+                <th className="px-3 py-3">Calc. Drop %</th>
+                <th className="px-3 py-3">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium">
               {cableRows.map(row => (
                 <tr key={row.path}>
-                  <td className="px-4 py-3 font-semibold text-slate-800">{row.path}</td>
-                  <td className="px-4 py-3">{row.specification}</td>
-                  <td className="px-4 py-3 font-mono">{row.requiredCurrentA} A</td>
-                  <td className="px-4 py-3 font-mono">{row.cableRatingA} A</td>
-                  <td className="px-4 py-3 font-mono">{row.utilizationPercent}%</td>
-                  <td className="px-4 py-3 font-mono font-bold text-[#156DB7]">{row.voltageDropPercent}%</td>
-                  <td className="px-4 py-3 font-mono text-slate-400">&lt; {row.limitPercent}%</td>
-                  <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
+                  <td className="px-3 py-3 font-semibold text-slate-800">{row.path}</td>
+                  <td className="px-3 py-3 font-mono">{row.requiredCurrentA} A</td>
+                  <td className="px-3 py-3 font-mono">
+                    {row.cableLengthM} m
+                    {row.lengthAssumed ? (
+                      <span className="block text-[10px] text-slate-400 font-sans">assumed</span>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-3 font-mono">&lt; {row.allowableDropPercent}%</td>
+                  <td className="px-3 py-3">{row.specification}</td>
+                  <td className="px-3 py-3 font-mono font-bold text-[#156DB7]">{row.voltageDropPercent}%</td>
+                  <td className="px-3 py-3"><StatusBadge status={row.status} /></td>
                 </tr>
               ))}
               <tr>
-                <td className="px-4 py-3 font-semibold text-slate-800">Equipment Earthing</td>
-                <td className="px-4 py-3" colSpan={6}>{calcs.cableSizing?.earthCableSize}</td>
-                <td className="px-4 py-3"><StatusBadge status="PASS" /></td>
+                <td className="px-3 py-3 font-semibold text-slate-800">Equipment Earthing</td>
+                <td className="px-3 py-3 font-mono">-</td>
+                <td className="px-3 py-3 font-mono">-</td>
+                <td className="px-3 py-3 font-mono">-</td>
+                <td className="px-3 py-3">{calcs.cableSizing?.earthCableSize}</td>
+                <td className="px-3 py-3 font-mono">-</td>
+                <td className="px-3 py-3"><StatusBadge status="PASS" /></td>
               </tr>
             </tbody>
           </table>

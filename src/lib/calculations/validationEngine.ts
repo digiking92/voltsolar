@@ -250,17 +250,71 @@ export function runSelfCheckEngine(params: {
 /** Informational post-pass notes for the report (never used to publish invalid designs). */
 export function buildDesignNotes(params: {
   connectedLoadW: number;
+  peakLoadW?: number;
   inverterSizeKva: number;
   estimatedDailyProductionKwh: number;
   dailyEnergyWh: number;
   solarArrayKw: number;
+  requiredArrayKwp?: number;
   batteryUsableKwh: number;
+  batteryInstalledKwh?: number;
+  batteryRequiredKwhRaw?: number;
   peakSunHours: number;
+  futureExpansionPercent?: number;
+  voltageMarginV?: number;
+  currentMarginA?: number;
+  stringVocMax?: number;
+  mpptVocLimit?: number;
+  stringVmp?: number;
+  mpptVmpMin?: number;
+  mpptVmpMax?: number;
+  protectionDeviceCount?: number;
+  cableLengthsAssumed?: boolean;
 }): ValidationWarning[] {
   const notes: ValidationWarning[] = [];
   const continuousKw = params.connectedLoadW / 1000;
+  const dailyKwh = params.dailyEnergyWh / 1000;
+  const requiredArrayKwp = params.requiredArrayKwp ?? 0;
+  const futureExpansionPercent = params.futureExpansionPercent ?? 0;
+  const voltageMarginV = params.voltageMarginV ?? 0;
+  const currentMarginA = params.currentMarginA ?? 0;
+  const batteryInstalledKwh = params.batteryInstalledKwh ?? params.batteryUsableKwh;
+  const batteryRequiredKwhRaw = params.batteryRequiredKwhRaw ?? 0;
 
-  if (continuousKw * 1.2 > params.inverterSizeKva && continuousKw <= params.inverterSizeKva) {
+  if (batteryRequiredKwhRaw > 0 && batteryInstalledKwh > 0) {
+    const reservePct = Math.round(
+      ((batteryInstalledKwh - batteryRequiredKwhRaw) / batteryRequiredKwhRaw) * 100
+    );
+    if (reservePct > 0) {
+      notes.push({
+        level: 'info',
+        message: `Battery has approximately ${reservePct}% reserve capacity above the calculated minimum energy requirement.`,
+        suggestion:
+          'Reserve covers round-trip losses, DoD limits, and short-term load variation on the selected profile.'
+      });
+    }
+  }
+
+  if (requiredArrayKwp > 0 && params.solarArrayKw > 0) {
+    const pvMarginPct = Math.round((params.solarArrayKw / requiredArrayKwp - 1) * 100);
+    if (pvMarginPct >= 10) {
+      notes.push({
+        level: 'info',
+        message: `PV array exceeds the minimum energy requirement by approximately ${pvMarginPct}% to improve recharge during cloudy conditions.`,
+        suggestion:
+          'This engineering margin improves recovery after overnight discharge and poor irradiance days.'
+      });
+    }
+  }
+
+  if (futureExpansionPercent >= 10) {
+    notes.push({
+      level: 'info',
+      message: `Future inverter expansion margin is approximately ${futureExpansionPercent}%.`,
+      suggestion:
+        'Additional continuous load can be added later without replacing the inverter, subject to battery and PV capacity.'
+    });
+  } else if (continuousKw * 1.2 > params.inverterSizeKva && continuousKw <= params.inverterSizeKva) {
     notes.push({
       level: 'info',
       message: `Inverter operates above 80% of continuous rating (${params.inverterSizeKva} kVA vs ${continuousKw.toFixed(2)} kW load).`,
@@ -268,7 +322,53 @@ export function buildDesignNotes(params: {
     });
   }
 
-  const dailyKwh = params.dailyEnergyWh / 1000;
+  const stringVmp = params.stringVmp ?? 0;
+  const mpptVmpMin = params.mpptVmpMin ?? 0;
+  const mpptVmpMax = params.mpptVmpMax ?? 0;
+  if (stringVmp > 0 && mpptVmpMin > 0 && stringVmp >= mpptVmpMin && stringVmp <= mpptVmpMax) {
+    notes.push({
+      level: 'info',
+      message: `PV string voltage operates within the inverter MPPT window (${mpptVmpMin}-${mpptVmpMax} V; operating Vmp ~${stringVmp} V).`,
+      suggestion: 'No string reconfiguration is required for MPPT tracking under the modelled conditions.'
+    });
+  }
+
+  if (voltageMarginV > 0 && voltageMarginV < 15 && (params.mpptVocLimit ?? 0) > 0) {
+    notes.push({
+      level: 'warning',
+      message: `Cold-weather Voc margin is only ${voltageMarginV.toFixed(1)} V below the inverter limit (${params.stringVocMax} V vs ${params.mpptVocLimit} V). This design is acceptable but should be verified for extremely cold installation environments.`,
+      suggestion:
+        'Confirm lowest expected ambient temperature; if colder than design assumption, reduce series count or select a higher Voc inverter.'
+    });
+  }
+
+  if (currentMarginA > 0 && currentMarginA < 5) {
+    notes.push({
+      level: 'info',
+      message: `MPPT current headroom is ${currentMarginA.toFixed(1)} A. The design passes, but additional parallel strings would require re-checking the inverter PV input limit.`,
+      suggestion: 'Do not add parallel strings without confirming inverter max PV current and fuse ratings.'
+    });
+  }
+
+  if ((params.protectionDeviceCount ?? 0) > 0) {
+    notes.push({
+      level: 'info',
+      message:
+        'Protection devices are selected according to calculated continuous current with IEC/NEC safety margins applied.',
+      suggestion: 'Verify device interrupting ratings and polarity markings during installation and commissioning.'
+    });
+  }
+
+  if (params.cableLengthsAssumed) {
+    notes.push({
+      level: 'info',
+      message:
+        'Cable run lengths use standard residential assumptions (PV 20 m, battery 2 m, AC 10 m) because site-specific distances were not entered.',
+      suggestion:
+        'Enter actual cable distances on the battery step to recalculate voltage drop and conductor sizes for this site.'
+    });
+  }
+
   if (params.estimatedDailyProductionKwh < dailyKwh) {
     notes.push({
       level: 'warning',
@@ -277,7 +377,6 @@ export function buildDesignNotes(params: {
     });
   }
 
-  // Cover daily load + ~one night of usable battery energy across a poor sun day (not both stacked raw)
   const recoveryKwh = dailyKwh + params.batteryUsableKwh * 0.35;
   const minPvKw = recoveryKwh / Math.max(params.peakSunHours, 0.1);
   if (params.solarArrayKw + 0.05 < minPvKw) {

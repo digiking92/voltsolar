@@ -28,6 +28,11 @@ export interface DesignPassportItem {
   status: 'PASS' | 'REVIEW' | 'FAIL';
 }
 
+export interface JustificationRow {
+  label: string;
+  value: string;
+}
+
 export interface EngineeringReportMeta {
   chemistryLabel: string;
   topologyLabel: string;
@@ -50,6 +55,13 @@ export interface EngineeringReportMeta {
   actualPvPowerW: number;
   maxPvCurrentA: number;
   maxPvPowerW: number;
+  selectionJustifications: {
+    inverter: JustificationRow[];
+    battery: JustificationRow[];
+    pv: JustificationRow[];
+    protection: string;
+  };
+  pvMarginNotes: string[];
 }
 
 const CHEMISTRY_LABELS: Record<BatteryType, string> = {
@@ -179,6 +191,135 @@ export function buildEngineeringReportMeta(
     ? 'CERTIFIED'
     : 'REVIEW REQUIRED';
 
+  const peakKw = calcs.peakLoad / 1000;
+  const continuousKw = calcs.connectedLoad / 1000;
+  const usableBatt =
+    calcs.batteryUsableKwh ?? calcs.batteryCapacityKwh * (calcs.batteryDodUsed || 0.9);
+  const requiredBatt =
+    calcs.batteryRequiredKwhRaw ??
+    (calcs.dailyEnergy * (inputs.backupHours / 24)) / 1000;
+  const reservePct =
+    requiredBatt > 0
+      ? Math.max(
+          0,
+          Math.round(
+            (((calcs.batteryInstalledKwh || calcs.batteryCapacityKwh) - requiredBatt) /
+              requiredBatt) *
+              100
+          )
+        )
+      : 0;
+
+  const selectionJustifications = {
+    inverter: [
+      { label: 'Continuous Load', value: `${continuousKw.toFixed(2)} kW within ${calcs.inverterSizeKva} kVA rating` },
+      { label: 'Peak Demand', value: `${peakKw.toFixed(2)} kW` },
+      {
+        label: 'Surge Requirement',
+        value: `${peakKw.toFixed(2)} kW peak demand validated against inverter surge capacity during selection`
+      },
+      {
+        label: 'Battery Voltage Compatibility',
+        value: `${inputs.resolvedSystemVoltageV}V DC bus matched to selected inverter`
+      },
+      {
+        label: 'PV Voltage Compatibility',
+        value: `Cold Voc ${calcs.stringVocMax ?? '-'} V <= MPPT limit ${calcs.mpptVocLimit ?? '-'} V`
+      },
+      {
+        label: 'MPPT Current Compatibility',
+        value: `${actualPvCurrentA} A <= ${maxPvCurrentA} A inverter PV input`
+      },
+      { label: 'Future Expansion Margin', value: `~${futureExpansionPercent}% continuous headroom` }
+    ],
+    battery: [
+      {
+        label: 'Selected Backup Hours',
+        value: `${inputs.backupHours} h target from user selection`
+      },
+      {
+        label: 'Load Profile Basis',
+        value: 'Average daily load energy (not simultaneous full connected load)'
+      },
+      {
+        label: 'Required Energy',
+        value: `${requiredBatt.toFixed(2)} kWh before efficiency / DoD / reserve`
+      },
+      {
+        label: 'Installed / Usable',
+        value: `${(calcs.batteryInstalledKwh || calcs.batteryCapacityKwh).toFixed(2)} kWh installed, ${usableBatt.toFixed(2)} kWh usable`
+      },
+      {
+        label: 'Chemistry & DoD',
+        value: `${CHEMISTRY_LABELS[inputs.batteryType]} at ${Math.round((calcs.batteryDodUsed || 0.9) * 100)}% DoD`
+      },
+      {
+        label: 'Engineering Reserve',
+        value: reservePct > 0 ? `~${reservePct}% above minimum required energy` : 'Matched to minimum plus efficiency stack'
+      },
+      {
+        label: 'SKU / Configuration',
+        value: `${calcs.batteryProductModel || 'Commercial battery bank'} | ${calcs.batterySeriesCount ?? '-'}S x ${calcs.batteryParallelCount ?? '-'}P`
+      }
+    ],
+    pv: [
+      {
+        label: 'Daily Consumption',
+        value: `${(calcs.dailyEnergy / 1000).toFixed(2)} kWh`
+      },
+      {
+        label: 'Minimum Array Target',
+        value: `${parseFloat(requiredArrayKwp.toFixed(2))} kWp from energy / (PSH x efficiency)`
+      },
+      {
+        label: 'Selected Array',
+        value: `${calcs.solarArrayKw} kWp (${calcs.panelQuantity} panels, ${calcs.panelConfiguration})`
+      },
+      {
+        label: 'Engineering Margin',
+        value: `${engineeringMarginPercent}% above minimum energy target`
+      },
+      {
+        label: 'String Electrical Fit',
+        value: `Voc ${calcs.stringVocMax ?? '-'} V / Vmp ${calcs.stringVmpHot ?? calcs.stringVmpMax ?? '-'} V within inverter MPPT limits`
+      },
+      {
+        label: 'Daily Net Production',
+        value: `${calcs.estimatedDailyProductionKwh} kWh/day estimated`
+      }
+    ],
+    protection:
+      'Each protection device is sized from calculated continuous current, then multiplied by the applicable IEC/NEC safety factor and rounded up to the nearest standard rating.'
+  };
+
+  const pvMarginNotes: string[] = [];
+  if (voltageMarginV > 0 && voltageMarginV < 15) {
+    pvMarginNotes.push(
+      `Cold-weather Voc margin is only ${voltageMarginV.toFixed(1)} V below the inverter limit (${calcs.stringVocMax} V vs ${calcs.mpptVocLimit} V). This design is acceptable but should be verified for extremely cold installation environments.`
+    );
+  } else if (voltageMarginV >= 15) {
+    pvMarginNotes.push(
+      `Cold-weather Voc headroom of ${voltageMarginV.toFixed(1)} V provides comfortable margin to the inverter Voc limit.`
+    );
+  }
+  if (currentMarginA > 0 && currentMarginA < 5) {
+    pvMarginNotes.push(
+      `MPPT current margin is only ${currentMarginA.toFixed(1)} A. Do not add parallel strings without re-validating inverter PV current limits.`
+    );
+  } else if (currentMarginA >= 5) {
+    pvMarginNotes.push(
+      `MPPT current headroom of ${currentMarginA.toFixed(1)} A is adequate for the published string layout.`
+    );
+  }
+  if (
+    (calcs.stringVmpHot ?? calcs.stringVmpMax ?? 0) >= (calcs.mpptVmpMin || 0) &&
+    (calcs.stringVmpHot ?? calcs.stringVmpMax ?? 0) <= (calcs.mpptVmpMax || Infinity)
+  ) {
+    pvMarginNotes.push(
+      `String Vmp operates within the inverter MPPT window (${calcs.mpptVmpMin}-${calcs.mpptVmpMax} V).`
+    );
+  }
+
   return {
     chemistryLabel: CHEMISTRY_LABELS[inputs.batteryType],
     topologyLabel: TOPOLOGY_LABELS[inputs.inverterType],
@@ -207,7 +348,40 @@ export function buildEngineeringReportMeta(
     actualPvPowerW: Math.round(actualPvPowerW),
     maxPvCurrentA,
     maxPvPowerW,
+    selectionJustifications,
+    pvMarginNotes
   };
+}
+
+export function parseInverterReasonPoints(reason: string): {
+  headline: string;
+  items: JustificationRow[];
+} {
+  const text = (reason || '').trim();
+  if (!text) return { headline: '', items: [] };
+
+  const parts = text
+    .split(/(?<=\.)\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  const headline = parts[0] || text;
+  const items: JustificationRow[] = [];
+
+  for (const part of parts.slice(1)) {
+    const cleaned = part.replace(/\.$/, '').trim();
+    const colon = cleaned.indexOf(':');
+    if (colon > 0 && colon < 48) {
+      items.push({
+        label: cleaned.slice(0, colon).trim(),
+        value: cleaned.slice(colon + 1).trim()
+      });
+    } else if (cleaned) {
+      items.push({ label: 'Check', value: cleaned });
+    }
+  }
+
+  return { headline, items };
 }
 
 export function getCableEngineeringRows(calcs: Calculations): {
@@ -215,43 +389,55 @@ export function getCableEngineeringRows(calcs: Calculations): {
   specification: string;
   requiredCurrentA: number;
   cableRatingA: number;
+  cableLengthM: number;
+  allowableDropPercent: number;
   utilizationPercent: number;
   voltageDropPercent: number;
   limitPercent: number;
   status: 'PASS' | 'REVIEW';
+  lengthAssumed: boolean;
 }[] {
-  const pvCurrent = (calcs.stringIscMax || 0) * SYSTEM_STANDARDS.necBreakerMultiplier;
-  const battCurrent = (calcs.batteryContinuousCurrentA || 0) * SYSTEM_STANDARDS.necBreakerMultiplier;
-  const acCurrent =
-    ((calcs.inverterSizeKva * 1000) / SYSTEM_STANDARDS.acNominalVoltageV) *
-    SYSTEM_STANDARDS.necBreakerMultiplier;
+  const cs = calcs.cableSizing;
 
   const rows = [
     {
-      path: 'PV Array → Inverter (DC)',
-      specification: calcs.cableSizing?.pvCableSize || '-',
-      requiredCurrentA: pvCurrent,
-      cableRatingA: calcs.cableSizing?.pvCableAmpacityA || cableAmpacityFromSizeString(calcs.cableSizing?.pvCableSize),
-      voltageDropPercent: calcs.cableSizing?.pvCableVoltageDropPercent || 0,
-      limitPercent: 2.0
+      path: 'PV Array -> Inverter (DC)',
+      specification: cs?.pvCableSize || '-',
+      requiredCurrentA: cs?.pvDesignCurrentA ?? (calcs.stringIscMax || 0) * SYSTEM_STANDARDS.necBreakerMultiplier,
+      cableRatingA: cs?.pvCableAmpacityA || cableAmpacityFromSizeString(cs?.pvCableSize),
+      cableLengthM: cs?.pvCableLengthM ?? 20,
+      allowableDropPercent: 2.0,
+      voltageDropPercent: cs?.pvCableVoltageDropPercent || 0,
+      limitPercent: 2.0,
+      lengthAssumed: cs?.pvLengthAssumed ?? cs?.cableLengthsAssumed !== false
     },
     {
-      path: 'Battery Bank → Inverter (DC)',
-      specification: calcs.cableSizing?.batteryCableSize || '-',
-      requiredCurrentA: battCurrent,
+      path: 'Battery Bank -> Inverter (DC)',
+      specification: cs?.batteryCableSize || '-',
+      requiredCurrentA:
+        cs?.batteryDesignCurrentA ??
+        (calcs.batteryContinuousCurrentA || 0) * SYSTEM_STANDARDS.necBreakerMultiplier,
       cableRatingA:
-        calcs.cableSizing?.batteryCableAmpacityA ||
-        cableAmpacityFromSizeString(calcs.cableSizing?.batteryCableSize),
-      voltageDropPercent: calcs.cableSizing?.batteryCableVoltageDropPercent || 0,
-      limitPercent: 1.0
+        cs?.batteryCableAmpacityA || cableAmpacityFromSizeString(cs?.batteryCableSize),
+      cableLengthM: cs?.batteryCableLengthM ?? 2,
+      allowableDropPercent: 1.0,
+      voltageDropPercent: cs?.batteryCableVoltageDropPercent || 0,
+      limitPercent: 1.0,
+      lengthAssumed: cs?.batteryLengthAssumed ?? cs?.cableLengthsAssumed !== false
     },
     {
-      path: 'Inverter → Distribution Board (AC)',
-      specification: calcs.cableSizing?.acCableSize || '-',
-      requiredCurrentA: acCurrent,
-      cableRatingA: calcs.cableSizing?.acCableAmpacityA || cableAmpacityFromSizeString(calcs.cableSizing?.acCableSize),
-      voltageDropPercent: calcs.cableSizing?.acCableVoltageDropPercent || 0,
-      limitPercent: 3.0
+      path: 'Inverter -> Distribution Board (AC)',
+      specification: cs?.acCableSize || '-',
+      requiredCurrentA:
+        cs?.acDesignCurrentA ??
+        ((calcs.inverterSizeKva * 1000) / SYSTEM_STANDARDS.acNominalVoltageV) *
+          SYSTEM_STANDARDS.necBreakerMultiplier,
+      cableRatingA: cs?.acCableAmpacityA || cableAmpacityFromSizeString(cs?.acCableSize),
+      cableLengthM: cs?.acCableLengthM ?? 10,
+      allowableDropPercent: 3.0,
+      voltageDropPercent: cs?.acCableVoltageDropPercent || 0,
+      limitPercent: 3.0,
+      lengthAssumed: cs?.acLengthAssumed ?? cs?.cableLengthsAssumed !== false
     }
   ];
 
@@ -261,10 +447,17 @@ export function getCableEngineeringRows(calcs: Calculations): {
     const status: 'PASS' | 'REVIEW' =
       utilizationPercent <= 100 && r.voltageDropPercent <= r.limitPercent ? 'PASS' : 'REVIEW';
     return {
-      ...r,
+      path: r.path,
+      specification: r.specification,
       requiredCurrentA: parseFloat(r.requiredCurrentA.toFixed(1)),
+      cableRatingA: r.cableRatingA,
+      cableLengthM: r.cableLengthM,
+      allowableDropPercent: r.allowableDropPercent,
       utilizationPercent,
-      status
+      voltageDropPercent: r.voltageDropPercent,
+      limitPercent: r.limitPercent,
+      status,
+      lengthAssumed: r.lengthAssumed
     };
   });
 }

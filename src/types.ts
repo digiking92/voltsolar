@@ -164,15 +164,23 @@ export interface Calculations {
     pvCableVoltageDropPercent?: number;
     pvCableAmpacityA?: number;
     pvDesignCurrentA?: number;
+    pvCableLengthM?: number;
     batteryCableSize?: string;
     batteryCableVoltageDropPercent?: number;
     batteryCableAmpacityA?: number;
     batteryDesignCurrentA?: number;
+    batteryCableLengthM?: number;
     acCableSize?: string;
     acCableVoltageDropPercent?: number;
     acCableAmpacityA?: number;
     acDesignCurrentA?: number;
+    acCableLengthM?: number;
     earthCableSize?: string;
+    /** True when one or more cable runs used standard residential default lengths. */
+    cableLengthsAssumed?: boolean;
+    pvLengthAssumed?: boolean;
+    batteryLengthAssumed?: boolean;
+    acLengthAssumed?: boolean;
   };
 
   // Design Validation warnings

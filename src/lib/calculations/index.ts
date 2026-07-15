@@ -4,7 +4,7 @@ import { getCandidatePanels, PanelSpecs, InverterSpecs } from './equipmentDataba
 import { getPeakSunHours, SYSTEM_STANDARDS } from './engineeringStandards';
 import { configureBatteryBank } from './batteryConfiguration';
 import { sizeProtectionDevices } from './protectionSizing';
-import { sizeSystemCables } from './cableSizing';
+import { sizeSystemCables, CableDistanceInputs } from './cableSizing';
 import {
   runConsistencyAudit,
   runSelfCheckEngine,
@@ -58,7 +58,8 @@ export function runFullDesignCalculations(
   panelSize: number,
   location: string = 'Austin, TX',
   inverterType: InverterType = 'auto',
-  projectType: 'residential' | 'commercial' = 'residential'
+  projectType: 'residential' | 'commercial' = 'residential',
+  cableDistances?: CableDistanceInputs
 ): Calculations {
   const loadRes = calculateLoadSchedule(appliances);
   if (loadRes.connectedLoad === 0) {
@@ -130,13 +131,16 @@ export function runFullDesignCalculations(
             if (ratio < 0.999) score -= 400;
             else score += Math.max(0, 50 - (ratio - 1) * 80);
 
+            const expansionPct = Math.max(
+              0,
+              Math.round((1 - loadRes.connectedLoad / (inv.sizeKva * 1000)) * 100)
+            );
             const pvChecks =
-              `MPPT Current Compatible: YES (${layout.currentPerMppt}A ≤ ${inv.maxPvCurrent}A). ` +
-              `PV Voltage Compatible: YES (${layout.stringVocMax}V ≤ ${inv.mpptVocLimit}V). ` +
-              `PV Power Compatible: YES (${layout.totalPvPowerW}W ≤ ${inv.maxPvPower}W). ` +
-              `Battery Voltage Compatible: YES (${vSys}V). ` +
-              `Future Expansion: ~${Math.max(0, Math.round((1 - loadRes.connectedLoad / (inv.sizeKva * 1000)) * 100))}%. ` +
-              `Engineering Status: PASS.`;
+              `PV Voltage Compatibility: YES (cold Voc ${layout.stringVocMax}V <= ${inv.mpptVocLimit}V). ` +
+              `MPPT Current Compatibility: YES (${layout.currentPerMppt}A <= ${inv.maxPvCurrent}A). ` +
+              `PV Power Compatibility: YES (${layout.totalPvPowerW}W <= ${inv.maxPvPower}W). ` +
+              `Battery Voltage Compatibility: YES (${vSys}V). ` +
+              `Future Expansion Margin: ~${expansionPct}%.`;
 
             candidates.push({
               systemVoltage: vSys,
@@ -189,7 +193,8 @@ export function runFullDesignCalculations(
     protectionRes.calculationsRaw.maxInverterDcCurrent,
     resolvedSystemVoltage,
     protectionRes.calculationsRaw.maxAcOutputCurrent,
-    inv.phases ?? 1
+    inv.phases ?? 1,
+    cableDistances
   );
 
   const batteryLayout = configureBatteryBank(
@@ -259,17 +264,42 @@ export function runFullDesignCalculations(
     ((layout.totalPvPowerW * psh * best.overallEfficiency) / 1000).toFixed(2)
   );
   const solarArrayKw = parseFloat((layout.totalPvPowerW / 1000).toFixed(2));
+  const efficiencyFrac = best.overallEfficiency;
+  const requiredArrayKwp =
+    psh > 0 && efficiencyFrac > 0
+      ? (loadRes.dailyEnergy / 1000) / (psh * efficiencyFrac)
+      : solarArrayKw;
+  const futureExpansionPercent = Math.max(
+    0,
+    Math.round((1 - loadRes.connectedLoad / Math.max(inv.sizeKva * 1000, 1)) * 100)
+  );
+  const voltageMarginV = Math.max(0, (inv.mpptVocLimit || 0) - (layout.stringVocMax || 0));
+  const currentMarginA = Math.max(0, (inv.maxPvCurrent || 0) - (layout.currentPerMppt || 0));
 
   const validationWarnings = [
     ...audit.warnings,
     ...buildDesignNotes({
       connectedLoadW: loadRes.connectedLoad,
+      peakLoadW: loadRes.peakLoad,
       inverterSizeKva: inv.sizeKva,
       estimatedDailyProductionKwh,
       dailyEnergyWh: loadRes.dailyEnergy,
       solarArrayKw,
+      requiredArrayKwp,
       batteryUsableKwh: batt.batteryUsableKwh,
-      peakSunHours: psh
+      batteryInstalledKwh: batt.batteryInstalledKwh,
+      batteryRequiredKwhRaw: batt.batteryRequiredKwhRaw,
+      peakSunHours: psh,
+      futureExpansionPercent,
+      voltageMarginV: parseFloat(voltageMarginV.toFixed(1)),
+      currentMarginA: parseFloat(currentMarginA.toFixed(1)),
+      stringVocMax: layout.stringVocMax,
+      mpptVocLimit: inv.mpptVocLimit,
+      stringVmp: layout.stringVmpHot ?? layout.stringVmpNominal,
+      mpptVmpMin: inv.mpptVmpMin,
+      mpptVmpMax: inv.mpptVmpMax,
+      protectionDeviceCount: protectionRes.deviceDetails?.length ?? 0,
+      cableLengthsAssumed: cableRes.cableLengthsAssumed
     })
   ];
 
@@ -329,6 +359,21 @@ export function runFullDesignCalculations(
       label: 'Hot Cell Temperature (Vmp)',
       value: SYSTEM_STANDARDS.maxCellTempC,
       unit: '°C'
+    },
+    {
+      label: 'PV Cable Run Length',
+      value: cableRes.pvCableLengthM,
+      unit: cableRes.cableLengthsAssumed ? 'm (default assumed)' : 'm (site input)'
+    },
+    {
+      label: 'Battery Cable Run Length',
+      value: cableRes.batteryCableLengthM,
+      unit: cableRes.cableLengthsAssumed ? 'm (default assumed)' : 'm (site input)'
+    },
+    {
+      label: 'AC Cable Run Length',
+      value: cableRes.acCableLengthM,
+      unit: cableRes.cableLengthsAssumed ? 'm (default assumed)' : 'm (site input)'
     }
   ];
 
@@ -442,15 +487,22 @@ export function runFullDesignCalculations(
       pvCableVoltageDropPercent: cableRes.pvCableVoltageDropPercent,
       pvCableAmpacityA: cableRes.pvCableAmpacityA,
       pvDesignCurrentA: cableRes.pvDesignCurrentA,
+      pvCableLengthM: cableRes.pvCableLengthM,
       batteryCableSize: cableRes.batteryCableSize,
       batteryCableVoltageDropPercent: cableRes.batteryCableVoltageDropPercent,
       batteryCableAmpacityA: cableRes.batteryCableAmpacityA,
       batteryDesignCurrentA: cableRes.batteryDesignCurrentA,
+      batteryCableLengthM: cableRes.batteryCableLengthM,
       acCableSize: cableRes.acCableSize,
       acCableVoltageDropPercent: cableRes.acCableVoltageDropPercent,
       acCableAmpacityA: cableRes.acCableAmpacityA,
       acDesignCurrentA: cableRes.acDesignCurrentA,
-      earthCableSize: cableRes.earthCableSize
+      acCableLengthM: cableRes.acCableLengthM,
+      earthCableSize: cableRes.earthCableSize,
+      cableLengthsAssumed: cableRes.cableLengthsAssumed,
+      pvLengthAssumed: cableRes.pvLengthAssumed,
+      batteryLengthAssumed: cableRes.batteryLengthAssumed,
+      acLengthAssumed: cableRes.acLengthAssumed
     },
 
     validationWarnings,

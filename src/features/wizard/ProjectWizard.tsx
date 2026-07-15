@@ -9,6 +9,7 @@ import { useApp } from '../../context/AppContext';
 import { DEFAULT_APPLIANCES } from '../../data/appliances';
 import { runFullDesignCalculations } from '../../lib/calculations';
 import { exportReportPdf } from '../../lib/exportReportPdf';
+import { parseInverterReasonPoints } from '../../lib/calculations/reportPresentation';
 import { Project, ProjectAppliance, BatteryType, SystemVoltage, InverterType, Calculations } from '../../types';
 import { EngineeringReport } from './EngineeringReport';
 
@@ -51,6 +52,10 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
   // Step 5: Battery
   const [batteryType, setBatteryType] = useState<BatteryType>('lithium');
   const [systemVoltage, setSystemVoltage] = useState<SystemVoltage>('auto');
+  // Optional cable run lengths (metres) — blank = standard residential defaults
+  const [pvCableDistanceM, setPvCableDistanceM] = useState('');
+  const [batteryCableDistanceM, setBatteryCableDistanceM] = useState('');
+  const [acCableDistanceM, setAcCableDistanceM] = useState('');
 
   // Step 6: Inverter
   const [inverterType, setInverterType] = useState<InverterType>('auto');
@@ -95,7 +100,23 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       setSystemVoltage(projectToEdit.systemVoltage);
       setInverterType(projectToEdit.inverterType);
       setPanelSize(projectToEdit.panelSize);
-      
+      const cs = projectToEdit.calculations?.cableSizing;
+      setPvCableDistanceM(
+        cs && cs.pvLengthAssumed === false && cs.pvCableLengthM != null
+          ? String(cs.pvCableLengthM)
+          : ''
+      );
+      setBatteryCableDistanceM(
+        cs && cs.batteryLengthAssumed === false && cs.batteryCableLengthM != null
+          ? String(cs.batteryCableLengthM)
+          : ''
+      );
+      setAcCableDistanceM(
+        cs && cs.acLengthAssumed === false && cs.acCableLengthM != null
+          ? String(cs.acCableLengthM)
+          : ''
+      );
+
       setCurrentStep(8); // Open in Document Preview mode immediately
     } else {
       // Set some sensible initial default empty template
@@ -112,6 +133,9 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       setSystemVoltage('auto');
       setInverterType('auto');
       setPanelSize(550);
+      setPvCableDistanceM('');
+      setBatteryCableDistanceM('');
+      setAcCableDistanceM('');
       
       setCurrentStep(1); // Start at step 1 for new designs
     }
@@ -141,7 +165,8 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
         applianceName: defaultApp.applianceName,
         customWattage: defaultApp.defaultWattage,
         quantity: 1,
-        hoursUsed: 4 // default 4 hours per day
+        hoursUsed: 4, // default 4 hours per day
+        surgeMultiplier: defaultApp.surgeMultiplier
       };
       setAppliancesList([...appliancesList, newApp]);
     }
@@ -209,6 +234,11 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
     estimatedDailyProductionKwh: 0,
   });
 
+  const parseOptionalDistance = (raw: string): number | undefined => {
+    const n = parseFloat(raw);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+
   const runActiveCalculations = (): Calculations & { isError?: boolean; errorMessage?: string; errorType?: string } => {
     // Expected during early wizard steps — do not run the engine or spam the console
     if (appliancesList.length === 0) {
@@ -225,7 +255,12 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
         panelSize,
         location,
         inverterType,
-        projectType
+        projectType,
+        {
+          pvDistanceM: parseOptionalDistance(pvCableDistanceM),
+          batteryDistanceM: parseOptionalDistance(batteryCableDistanceM),
+          acDistanceM: parseOptionalDistance(acCableDistanceM)
+        }
       );
     } catch (err: any) {
       console.error(err);
@@ -1061,6 +1096,56 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                 </div>
               </div>
             </div>
+
+            {/* Optional cable lengths — not required; blank uses residential defaults */}
+            <div className="pt-2 border-t border-slate-100 space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Optional Cable Run Lengths (metres)
+                </label>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Leave blank to use standard residential assumptions (PV 20 m, battery 2 m, AC 10 m). Entered values recalculate voltage drop and conductor size.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1.5">PV Array to Inverter</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder="e.g. 20"
+                    value={pvCableDistanceM}
+                    onChange={e => setPvCableDistanceM(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#156DB7]/30"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1.5">Inverter to Battery</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder="e.g. 2"
+                    value={batteryCableDistanceM}
+                    onChange={e => setBatteryCableDistanceM(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#156DB7]/30"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1.5">Inverter to Distribution Board</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder="e.g. 10"
+                    value={acCableDistanceM}
+                    onChange={e => setAcCableDistanceM(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#156DB7]/30"
+                  />
+                </div>
+              </div>
+            </div>
           </motion.div>
         )}
 
@@ -1111,11 +1196,43 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                   <div className="space-y-1">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Recommended Capacity</span>
                     <h3 className="text-3xl font-extrabold text-slate-900">{activeCalcs.inverterSizeKva.toFixed(1)} kVA / kW</h3>
+                    {activeCalcs.inverterModelRecommended ? (
+                      <p className="text-xs font-semibold text-slate-700 pt-1">{activeCalcs.inverterModelRecommended}</p>
+                    ) : null}
                   </div>
 
-                  <p className="text-xs text-slate-600 leading-relaxed bg-white p-3.5 rounded-xl border border-slate-100">
-                    {activeCalcs.inverterReason}
-                  </p>
+                  {(() => {
+                    const parsed = parseInverterReasonPoints(activeCalcs.inverterReason || '');
+                    if (!parsed.headline && parsed.items.length === 0) {
+                      return (
+                        <p className="text-xs text-slate-500 bg-white p-3.5 rounded-xl border border-slate-100">
+                          Complete earlier steps to see inverter matching details.
+                        </p>
+                      );
+                    }
+                    return (
+                      <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
+                        {parsed.headline ? (
+                          <p className="text-xs font-semibold text-slate-800 px-3.5 py-2.5 border-b border-slate-100">
+                            {parsed.headline.replace(/\.$/, '')}
+                          </p>
+                        ) : null}
+                        <ul className="divide-y divide-slate-100">
+                          {parsed.items.map(item => (
+                            <li
+                              key={`${item.label}-${item.value}`}
+                              className="px-3.5 py-2.5 flex flex-col gap-0.5"
+                            >
+                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+                                {item.label}
+                              </span>
+                              <span className="text-xs text-slate-800 leading-snug">{item.value}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div className="p-4 bg-amber-50 rounded-xl border border-amber-100/50 flex items-start space-x-3 text-[10px] text-amber-800">
@@ -1278,6 +1395,9 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     setSystemVoltage('auto');
                     setInverterType('auto');
                     setPanelSize(550);
+                    setPvCableDistanceM('');
+                    setBatteryCableDistanceM('');
+                    setAcCableDistanceM('');
                   }
                 }}
                 className="px-6 py-3.5 border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-600 font-semibold text-xs rounded-xl transition-all text-center"

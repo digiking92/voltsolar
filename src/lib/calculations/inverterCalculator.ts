@@ -146,11 +146,20 @@ export function searchCompatibleInverters(
     // Mild preference for adequate MPPT current — do not dominate brand choice
     score += Math.min(8, inverter.maxPvCurrent * 0.25);
 
+    const continuousKw = connectedLoadW / 1000;
+    const peakKw = peakLoadW / 1000;
+    const surgeKw = inverter.sizeKva * inverter.surgeFactor;
+    const expansionPct = Math.max(
+      0,
+      Math.round((1 - connectedLoadW / Math.max(inverter.sizeKva * 1000, 1)) * 100)
+    );
     const reason =
       `${inverter.brand} ${inverter.model} (${inverter.sizeKva} kVA) selected. ` +
-      `Continuous load ${(connectedLoadW / 1000).toFixed(2)} kW ≤ ${inverter.sizeKva} kVA. ` +
-      `Peak load ${(peakLoadW / 1000).toFixed(2)} kW ≤ surge ${(inverter.sizeKva * inverter.surgeFactor).toFixed(1)} kW. ` +
-      `Battery bus ${systemVoltage}V compatible. ` +
+      `Continuous Load: ${continuousKw.toFixed(2)} kW within ${inverter.sizeKva} kVA rating. ` +
+      `Peak Demand: ${peakKw.toFixed(2)} kW. ` +
+      `Surge Requirement: ${peakKw.toFixed(2)} kW <= ${surgeKw.toFixed(1)} kW inverter surge capacity. ` +
+      `Battery Voltage Compatibility: ${systemVoltage}V bus supported. ` +
+      `Future Expansion Margin: ~${expansionPct}%. ` +
       `Engineering status: PASS.`;
 
     ranked.push({

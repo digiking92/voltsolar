@@ -504,7 +504,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     },
     { label: 'Usable Battery Energy', value: `${usableBatt.toFixed(2)} kWh` },
     {
-      label: 'Expected Backup',
+      label: 'Estimated Backup (Based on Selected Load Profile)',
       value: `${(calcs.batteryExpectedBackupHours || backupHours).toFixed(1)} Hours`
     },
     { label: 'Nominal Voltage', value: `${resolvedV} V` },
@@ -523,6 +523,14 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
       value: `${(calcs.batteryMaxDischargeCurrentA ?? 0).toFixed(1)} A / ${(calcs.batteryMaxChargeCurrentA ?? 0).toFixed(1)} A`
     }
   ]);
+  w.body(
+    `Backup time is calculated from usable battery energy after inverter efficiency, using the entered appliance schedule and the selected ${backupHours}-hour backup target. It is not the runtime if every connected appliance runs at full load simultaneously.`,
+    { size: 8, color: COLORS.muted }
+  );
+  w.body('Why this battery bank was selected:', { bold: true, size: 8.5 });
+  for (const row of meta.selectionJustifications.battery) {
+    w.bullet(`${row.label}: ${row.value}`);
+  }
   if (calcs.batteryProductModel) {
     w.body(`Recommended SKU: ${calcs.batteryProductModel}`, { size: 8.5 });
   }
@@ -542,6 +550,10 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     `Required array = Daily Energy / (Peak Sun Hours x System Efficiency). Recommendation uses ${panelWpActual} Wp modules (${calcs.panelQuantity} panels, ${calcs.panelConfiguration}).`,
     { size: 8, color: COLORS.muted }
   );
+  w.body('Why this PV array was selected:', { bold: true, size: 8.5 });
+  for (const row of meta.selectionJustifications.pv) {
+    w.bullet(`${row.label}: ${row.value}`);
+  }
   w.rule();
 
   // --- 6. Inverter ---
@@ -550,7 +562,10 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     `${calcs.inverterModelRecommended || 'Recommended inverter'} | ${calcs.inverterSizeKva} kVA | ${meta.topologyLabel}`,
     { bold: true, size: 10 }
   );
-  if (calcs.inverterReason) w.body(calcs.inverterReason, { size: 8.5 });
+  w.body('Why this inverter was selected:', { bold: true, size: 8.5 });
+  for (const row of meta.selectionJustifications.inverter) {
+    w.bullet(`${row.label}: ${row.value}`);
+  }
 
   const mpptNote =
     inverterType === 'off_grid'
@@ -623,6 +638,9 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     `Layout: ${calcs.seriesCount ?? '-'} series x ${calcs.parallelCount ?? '-'} parallel (${calcs.panelQuantity} panels).`,
     { size: 8, color: COLORS.muted }
   );
+  for (const note of meta.pvMarginNotes) {
+    w.body(`Engineering note: ${note}`, { size: 8, color: COLORS.amber });
+  }
   w.rule();
 
   // --- 8. SLD (embedded image) ---
@@ -649,6 +667,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
 
   // --- 9. Protection ---
   w.sectionTitle('9. Protection Device Schedule');
+  w.body(meta.selectionJustifications.protection, { size: 8, color: COLORS.muted });
   const devices = calcs.protectionSchedule?.deviceDetails || [];
   if (devices.length === 0) {
     w.body('No protection devices calculated for this design.', { color: COLORS.amber });
@@ -670,29 +689,35 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
 
   // --- 10. Cables ---
   w.sectionTitle('10. Cable Engineering Schedule');
+  w.body(
+    calcs.cableSizing?.cableLengthsAssumed !== false
+      ? 'Cable lengths use standard residential assumptions (PV 20 m, battery 2 m, AC 10 m) because site-specific distances were not entered.'
+      : 'Cable sizes and voltage drop were recalculated using the site-specific run lengths entered for this project.',
+    { size: 8, color: COLORS.muted }
+  );
   w.table(
-    ['Cable Run', 'Spec', 'Req A', 'Ampacity', 'Util %', 'V Drop', 'Status'],
+    ['Cable Run', 'Current A', 'Length m', 'Allow %', 'Selected Size', 'Drop %', 'Status'],
     [
       ...cableRows.map(r => [
         r.path,
-        r.specification,
         `${r.requiredCurrentA}`,
-        `${r.cableRatingA}`,
-        `${r.utilizationPercent}`,
+        `${r.cableLengthM}${r.lengthAssumed ? ' (assumed)' : ''}`,
+        `< ${r.allowableDropPercent}%`,
+        r.specification,
         `${r.voltageDropPercent}%`,
         r.status
       ]),
       [
         'Equipment Earthing',
+        '-',
+        '-',
+        '-',
         calcs.cableSizing?.earthCableSize || '-',
-        '-',
-        '-',
-        '-',
         '-',
         'PASS'
       ]
     ],
-    [2.2, 1.4, 0.7, 0.8, 0.7, 0.7, 0.7]
+    [2.0, 0.8, 1.0, 0.7, 1.6, 0.7, 0.7]
   );
   w.rule();
 
