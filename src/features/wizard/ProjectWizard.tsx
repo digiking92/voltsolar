@@ -310,11 +310,38 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
   };
 
   const handleDownloadPdf = async () => {
-    if (!reportRef.current || isDownloadingPdf) return;
+    if (isDownloadingPdf) return;
+    if (!activeCalcs || activeCalcs.isError) {
+      window.alert(
+        activeCalcs?.isError
+          ? 'Cannot download PDF while sizing is blocked. Fix the calculation error first.'
+          : 'Report calculations are not ready yet. Please wait a moment and try again.'
+      );
+      return;
+    }
     setIsDownloadingPdf(true);
     try {
       const name = (projectName || 'engineering-report').trim();
-      await exportReportPdf(reportRef.current, `${name}-VoltSolar-Report`);
+      await exportReportPdf(
+        {
+          calcs: activeCalcs,
+          projectName,
+          clientName,
+          clientPhone,
+          clientEmail,
+          location,
+          projectType,
+          backupHours,
+          batteryType,
+          systemVoltage,
+          inverterType,
+          panelSize,
+          appliancesList,
+          designId,
+          issuedAt: reportIssuedAt
+        },
+        `${name}-VoltSolar-Report`
+      );
     } catch (err) {
       console.error('PDF export failed:', err);
       const message =

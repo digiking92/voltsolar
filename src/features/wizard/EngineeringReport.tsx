@@ -589,6 +589,7 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           <span>8. Single-Line Diagram (SLD)</span>
         </h3>
         <div
+          data-sld-diagram
           className="overflow-hidden rounded-3xl border border-slate-200/60 bg-slate-900 shadow-inner w-full print:border-none"
           dangerouslySetInnerHTML={{ __html: calcs.singleLineDiagramSvg || '' }}
         />
