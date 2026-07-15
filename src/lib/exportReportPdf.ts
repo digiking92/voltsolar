@@ -36,6 +36,44 @@ function sanitizeFilename(filename: string): string {
   return filename.replace(/[<>:"/\\|?*]+/g, '-').trim() || 'engineering-report';
 }
 
+/**
+ * jsPDF Helvetica only supports WinAnsi. Unicode like <=, ->, x, Phi
+ * otherwise corrupts the entire string into spaced/garbage glyphs.
+ */
+function pdfSafe(input: unknown): string {
+  let s = String(input ?? '');
+  s = s
+    .replace(/\u00d7|\u2715|\u2716/g, 'x')
+    .replace(/\u22c5|\u00b7|\u2022|\u2023/g, '-')
+    .replace(/\u2192|\u2794|\u21d2|\u279c/g, '->')
+    .replace(/\u2190|\u21d0/g, '<-')
+    .replace(/\u2264|\u2a7d/g, '<=')
+    .replace(/\u2265|\u2a7e/g, '>=')
+    .replace(/\u2013|\u2014|\u2212|\u2015/g, '-')
+    .replace(/\u2018|\u2019|\u2032|\u0060/g, "'")
+    .replace(/\u201c|\u201d|\u2033/g, '"')
+    .replace(/\u00b0/g, ' deg')
+    .replace(/\u00ae/g, '(R)')
+    .replace(/\u2122/g, '(TM)')
+    .replace(/\u00b1/g, '+/-')
+    .replace(/\u03a6|\u03c6|\u00d8|\u00f8|\u0278/g, 'Ph')
+    .replace(/\u2126|\u03a9/g, 'Ohm')
+    .replace(/\u00b2/g, '2')
+    .replace(/\u00b3/g, '3')
+    .replace(/\u00b5|\u03bc/g, 'u')
+    .replace(/\u2248|\u223c/g, '~')
+    .replace(/\u00a0|\u202f|\u2009|\u200a|\u200b/g, ' ')
+    .replace(/\u2026/g, '...')
+    .replace(/[^\x20-\x7E]/g, '');
+  return s.replace(/[ \t]+/g, ' ').trim();
+}
+
+function asLines(result: string | string[]): string[] {
+  if (Array.isArray(result)) return result.map(pdfSafe).filter(Boolean);
+  const one = pdfSafe(result);
+  return one ? [one] : [];
+}
+
 const COLORS = {
   brand: [21, 109, 183] as [number, number, number],
   navy: [18, 58, 99] as [number, number, number],
@@ -47,6 +85,58 @@ const COLORS = {
   red: [220, 38, 38] as [number, number, number],
   amber: [180, 83, 9] as [number, number, number],
 };
+
+async function rasterizeSvgToPng(svgMarkup: string): Promise<{ dataUrl: string; width: number; height: number } | null> {
+  const raw = (svgMarkup || '').trim();
+  if (!raw || !raw.includes('<svg')) return null;
+
+  try {
+    let svg = raw;
+    if (!svg.includes('xmlns=')) {
+      svg = svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    // Prefer fixed pixel size for crisp rasterization
+    if (!/width=/.test(svg)) {
+      svg = svg.replace('<svg', '<svg width="1600" height="840"');
+    } else {
+      svg = svg
+        .replace(/\swidth="[^"]*"/, ' width="1600"')
+        .replace(/\sheight="[^"]*"/, ' height="840"');
+    }
+
+    const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('SLD image load failed'));
+      image.src = url;
+    });
+
+    URL.revokeObjectURL(url);
+
+    const width = Math.max(img.naturalWidth || 1600, 800);
+    const height = Math.max(img.naturalHeight || 840, 420);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+
+    return {
+      dataUrl: canvas.toDataURL('image/png'),
+      width,
+      height
+    };
+  } catch {
+    return null;
+  }
+}
 
 class PdfWriter {
   pdf: jsPDF;
@@ -79,7 +169,7 @@ class PdfWriter {
     this.pdf.setFontSize(8);
     this.pdf.setTextColor(...COLORS.muted);
     this.pdf.text(
-      `VoltSolar Engineering Report  ·  page ${this.page}`,
+      pdfSafe(`VoltSolar Engineering Report - page ${this.page}`),
       this.pageW / 2,
       this.pageH - 8,
       { align: 'center' }
@@ -101,16 +191,18 @@ class PdfWriter {
     this.pdf.setFont('helvetica', 'bold');
     this.pdf.setFontSize(11);
     this.pdf.setTextColor(...COLORS.navy);
-    this.pdf.text(title, this.margin + 4, this.y + 4.2);
+    this.pdf.text(pdfSafe(title), this.margin + 4, this.y + 4.2);
     this.y += 10;
   }
 
   body(text: string, opts?: { bold?: boolean; size?: number; color?: [number, number, number] }): void {
     const size = opts?.size ?? 9;
+    const safe = pdfSafe(text);
+    if (!safe) return;
     this.pdf.setFont('helvetica', opts?.bold ? 'bold' : 'normal');
     this.pdf.setFontSize(size);
     this.pdf.setTextColor(...(opts?.color ?? COLORS.slate));
-    const lines = this.pdf.splitTextToSize(text, this.contentW) as string[];
+    const lines = asLines(this.pdf.splitTextToSize(safe, this.contentW));
     const lineH = size * 0.42;
     this.ensure(lines.length * lineH + 2);
     for (const line of lines) {
@@ -126,11 +218,11 @@ class PdfWriter {
     this.pdf.setFont('helvetica', 'normal');
     this.pdf.setFontSize(7.5);
     this.pdf.setTextColor(...COLORS.muted);
-    this.pdf.text(label, x, this.y);
+    this.pdf.text(pdfSafe(label), x, this.y);
     this.pdf.setFont('helvetica', 'bold');
     this.pdf.setFontSize(9.5);
     this.pdf.setTextColor(...COLORS.navy);
-    const valLines = this.pdf.splitTextToSize(value || '-', colW - 4) as string[];
+    const valLines = asLines(this.pdf.splitTextToSize(pdfSafe(value || '-'), colW - 4));
     this.pdf.text(valLines[0] || '-', x, this.y + 4.2);
   }
 
@@ -155,6 +247,7 @@ class PdfWriter {
     const widths = weights.map(w => (this.contentW * w) / total);
     const rowH = 6.2;
     const headH = 7;
+    const safeHeaders = headers.map(pdfSafe);
 
     this.ensure(headH + rowH);
     let x = this.margin;
@@ -163,7 +256,7 @@ class PdfWriter {
     this.pdf.setFont('helvetica', 'bold');
     this.pdf.setFontSize(7.5);
     this.pdf.setTextColor(...COLORS.muted);
-    headers.forEach((h, i) => {
+    safeHeaders.forEach((h, i) => {
       this.pdf.text(h, x + 1.5, this.y + 4.5);
       x += widths[i];
     });
@@ -172,12 +265,11 @@ class PdfWriter {
     this.pdf.setFont('helvetica', 'normal');
     this.pdf.setFontSize(8);
     for (const row of rows) {
-      // Measure wrapped height
       let maxLines = 1;
       const wrapped = row.map((cell, i) => {
-        const lines = this.pdf.splitTextToSize(String(cell ?? '-'), widths[i] - 3) as string[];
-        maxLines = Math.max(maxLines, lines.length);
-        return lines;
+        const lines = asLines(this.pdf.splitTextToSize(pdfSafe(cell ?? '-'), widths[i] - 3));
+        maxLines = Math.max(maxLines, Math.max(lines.length, 1));
+        return lines.length ? lines : ['-'];
       });
       const h = Math.max(rowH, maxLines * 3.4 + 2.5);
       this.ensure(h + 1);
@@ -200,13 +292,15 @@ class PdfWriter {
   }
 
   bullet(text: string): void {
+    const safe = pdfSafe(text);
+    if (!safe) return;
     this.pdf.setFont('helvetica', 'normal');
     this.pdf.setFontSize(8.5);
     this.pdf.setTextColor(...COLORS.slate);
-    const lines = this.pdf.splitTextToSize(text, this.contentW - 5) as string[];
+    const lines = asLines(this.pdf.splitTextToSize(safe, this.contentW - 5));
     this.ensure(lines.length * 3.6 + 1);
     this.pdf.setTextColor(...COLORS.brand);
-    this.pdf.text('•', this.margin, this.y);
+    this.pdf.text('-', this.margin, this.y);
     this.pdf.setTextColor(...COLORS.slate);
     lines.forEach((line, i) => {
       this.pdf.text(line, this.margin + 4, this.y + i * 3.6);
@@ -214,14 +308,12 @@ class PdfWriter {
     this.y += lines.length * 3.6 + 1.5;
   }
 
-  badge(text: string, tone: 'pass' | 'fail' | 'review' = 'pass'): void {
-    const color =
-      tone === 'pass' ? COLORS.green : tone === 'fail' ? COLORS.red : COLORS.amber;
-    this.pdf.setFont('helvetica', 'bold');
-    this.pdf.setFontSize(8);
-    this.pdf.setTextColor(...color);
-    this.pdf.text(text, this.margin, this.y);
-    this.y += 5;
+  image(dataUrl: string, aspectWidth: number, aspectHeight: number): void {
+    const imgW = this.contentW;
+    const imgH = (imgW * aspectHeight) / aspectWidth;
+    this.ensure(imgH + 4);
+    this.pdf.addImage(dataUrl, 'PNG', this.margin, this.y, imgW, imgH);
+    this.y += imgH + 4;
   }
 }
 
@@ -232,8 +324,7 @@ function statusTone(status: string): 'pass' | 'fail' | 'review' {
 }
 
 /**
- * Native jsPDF text report — no html2canvas / DOM screenshots.
- * Always produces a readable, multi-page A4 PDF.
+ * Native jsPDF text report with ASCII-safe text + embedded SLD image.
  */
 export async function exportReportPdf(data: ReportPdfData, filename: string): Promise<void> {
   const safeName = sanitizeFilename(filename);
@@ -290,6 +381,8 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     { label: 'Future Expansion', pass: meta.futureExpansionPercent >= 10 }
   ];
 
+  const sldImage = await rasterizeSvgToPng(calcs.singleLineDiagramSvg || '');
+
   const w = new PdfWriter();
   const { pdf } = w;
   const issuedLabel = issuedAt.toLocaleDateString('en-GB', {
@@ -298,19 +391,19 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     year: 'numeric'
   });
 
-  // ——— Cover / header ———
+  // --- Cover / header ---
   pdf.setFillColor(...COLORS.brand);
   pdf.circle(w.margin + 2, w.y + 2, 1.8, 'F');
   pdf.setFont('helvetica', 'bold');
   pdf.setFontSize(9);
   pdf.setTextColor(...COLORS.brand);
-  pdf.text('VOLTSOLAR ENGINEERING DESIGN REPORT', w.margin + 6, w.y + 3);
+  pdf.text(pdfSafe('VOLTSOLAR ENGINEERING DESIGN REPORT'), w.margin + 6, w.y + 3);
   w.y += 9;
 
   pdf.setFont('helvetica', 'bold');
   pdf.setFontSize(18);
   pdf.setTextColor(...COLORS.navy);
-  pdf.text('SYSTEM DESIGN PROPOSAL', w.margin, w.y);
+  pdf.text(pdfSafe('SYSTEM DESIGN PROPOSAL'), w.margin, w.y);
   w.y += 7;
 
   w.body('Prepared to IEC 60364 / IEC 62548 / NEC Article 690 engineering practice.', {
@@ -325,20 +418,20 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   pdf.setFont('helvetica', 'bold');
   pdf.setFontSize(7.5);
   pdf.setTextColor(...COLORS.muted);
-  pdf.text('Design ID', w.margin + 4, boxY);
-  pdf.text('Issued', w.margin + 70, boxY);
-  pdf.text('Status', w.margin + 130, boxY);
+  pdf.text(pdfSafe('Design ID'), w.margin + 4, boxY);
+  pdf.text(pdfSafe('Issued'), w.margin + 70, boxY);
+  pdf.text(pdfSafe('Status'), w.margin + 130, boxY);
   pdf.setFont('helvetica', 'bold');
   pdf.setFontSize(10);
   pdf.setTextColor(...COLORS.navy);
-  pdf.text(designId, w.margin + 4, boxY + 5);
-  pdf.text(issuedLabel, w.margin + 70, boxY + 5);
+  pdf.text(pdfSafe(designId), w.margin + 4, boxY + 5);
+  pdf.text(pdfSafe(issuedLabel), w.margin + 70, boxY + 5);
   const statusColor = statusTone(meta.overallStatus) === 'pass' ? COLORS.green : COLORS.amber;
   pdf.setTextColor(...statusColor);
-  pdf.text(meta.overallStatus, w.margin + 130, boxY + 5);
+  pdf.text(pdfSafe(meta.overallStatus), w.margin + 130, boxY + 5);
   w.y += 20;
 
-  // ——— 1. Client ———
+  // --- 1. Client ---
   w.sectionTitle('1. Client & Installation Details');
   w.kvGrid([
     { label: 'Project Name', value: projectName || 'Unnamed Design Project' },
@@ -353,7 +446,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   ]);
   w.rule();
 
-  // ——— 2. Loads ———
+  // --- 2. Loads ---
   w.sectionTitle('2. Appliance Load Schedule & Daily Energy Demand');
   if (appliancesList.length === 0) {
     w.body('No appliances loaded in this design yet.', { color: COLORS.amber });
@@ -379,20 +472,20 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   ]);
   w.rule();
 
-  // ——— 3. Components ———
+  // --- 3. Components ---
   w.sectionTitle('3. Recommended System Components');
   w.kvGrid([
     {
       label: 'PV Array',
-      value: `${calcs.solarArrayKw} kWp · ${calcs.panelQuantity} × ${panelWpActual} Wp · ${calcs.panelConfiguration}`
+      value: `${calcs.solarArrayKw} kWp | ${calcs.panelQuantity} x ${panelWpActual} Wp | ${calcs.panelConfiguration}`
     },
     {
       label: 'Battery Bank',
-      value: `${calcs.batteryCapacityKwh.toFixed(2)} kWh · ${resolvedV}V · ${calcs.batteryCapacityAh} Ah · ${meta.chemistryLabel}`
+      value: `${calcs.batteryCapacityKwh.toFixed(2)} kWh | ${resolvedV}V | ${calcs.batteryCapacityAh} Ah | ${meta.chemistryLabel}`
     },
     {
       label: 'Inverter',
-      value: `${calcs.inverterSizeKva} kVA · ${calcs.inverterModelRecommended || '-'} · ${meta.topologyLabel}`
+      value: `${calcs.inverterSizeKva} kVA | ${calcs.inverterModelRecommended || '-'} | ${meta.topologyLabel}`
     },
     {
       label: 'Net Daily Production',
@@ -401,7 +494,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   ]);
   w.rule();
 
-  // ——— 4. Battery ———
+  // --- 4. Battery ---
   w.sectionTitle('4. Battery Bank Engineering Explanation');
   w.kvGrid([
     { label: 'Required Battery Energy', value: `${requiredBatt.toFixed(2)} kWh` },
@@ -418,7 +511,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     { label: 'Bank Capacity', value: `${calcs.batteryCapacityAh} Ah` },
     {
       label: 'Configuration',
-      value: `${calcs.batterySeriesCount ?? '-'}S × ${calcs.batteryParallelCount ?? '-'}P · ${calcs.batteryQuantity} total`
+      value: `${calcs.batterySeriesCount ?? '-'}S x ${calcs.batteryParallelCount ?? '-'}P | ${calcs.batteryQuantity} total`
     },
     { label: 'Utilization', value: `${(calcs.batteryUtilizationPercent || 0).toFixed(0)}%` },
     {
@@ -435,7 +528,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   }
   w.rule();
 
-  // ——— 5. PV ———
+  // --- 5. PV ---
   w.sectionTitle('5. PV Array Sizing Explanation');
   w.kvGrid([
     { label: 'Daily Consumption', value: `${(calcs.dailyEnergy / 1000).toFixed(2)} kWh` },
@@ -446,17 +539,17 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     { label: 'Final Recommendation', value: `${calcs.solarArrayKw} kWp` }
   ]);
   w.body(
-    `Required array = Daily Energy ÷ (Peak Sun Hours × System Efficiency). Recommendation uses ${panelWpActual} Wp modules (${calcs.panelQuantity} panels, ${calcs.panelConfiguration}).`,
+    `Required array = Daily Energy / (Peak Sun Hours x System Efficiency). Recommendation uses ${panelWpActual} Wp modules (${calcs.panelQuantity} panels, ${calcs.panelConfiguration}).`,
     { size: 8, color: COLORS.muted }
   );
   w.rule();
 
-  // ——— 6. Inverter ———
+  // --- 6. Inverter ---
   w.sectionTitle('6. Inverter Selection & Validation');
-  w.body(`${calcs.inverterModelRecommended || 'Recommended inverter'} · ${calcs.inverterSizeKva} kVA · ${meta.topologyLabel}`, {
-    bold: true,
-    size: 10
-  });
+  w.body(
+    `${calcs.inverterModelRecommended || 'Recommended inverter'} | ${calcs.inverterSizeKva} kVA | ${meta.topologyLabel}`,
+    { bold: true, size: 10 }
+  );
   if (calcs.inverterReason) w.body(calcs.inverterReason, { size: 8.5 });
 
   const mpptNote =
@@ -465,9 +558,9 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
       : 'This recommendation uses a hybrid / AIO with built-in MPPT(s). A separate MPPT is not required for this design.';
   w.body(mpptNote, { size: 8, color: COLORS.muted });
   w.body(
-    `Array → MPPT: cold Voc ≤ ${calcs.stringVocMax ?? '-'} V${
+    `Array -> MPPT: cold Voc <= ${calcs.stringVocMax ?? '-'} V${
       calcs.mpptVocLimit != null ? ` (limit ${calcs.mpptVocLimit} V)` : ''
-    } · string Vmp ~ ${calcs.stringVmpMax ?? '-'} V · current ~ ${calcs.currentPerMpptA ?? '-'} A${
+    } | string Vmp ~ ${calcs.stringVmpMax ?? '-'} V | current ~ ${calcs.currentPerMpptA ?? '-'} A${
       calcs.maxPvCurrentA != null ? ` / limit ${calcs.maxPvCurrentA} A` : ''
     }.`,
     { size: 8, color: COLORS.muted }
@@ -484,7 +577,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   w.body(`Overall compatibility: ${passPct}%`, { bold: true });
   w.rule();
 
-  // ——— 7. String validation ———
+  // --- 7. String validation ---
   w.sectionTitle('7. PV String Electrical Validation & Headroom');
   w.kvGrid([
     { label: 'Module Voc', value: `${calcs.panelVoc ?? '-'} V` },
@@ -527,33 +620,34 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     [2.2, 1.2, 1.4, 1.2, 0.8]
   );
   w.body(
-    `Layout: ${calcs.seriesCount ?? '-'} series × ${calcs.parallelCount ?? '-'} parallel (${calcs.panelQuantity} panels).`,
+    `Layout: ${calcs.seriesCount ?? '-'} series x ${calcs.parallelCount ?? '-'} parallel (${calcs.panelQuantity} panels).`,
     { size: 8, color: COLORS.muted }
   );
   w.rule();
 
-  // ——— 8. SLD note ———
+  // --- 8. SLD (embedded image) ---
   w.sectionTitle('8. Single-Line Diagram (SLD)');
-  w.body(
-    'The interactive single-line diagram is available in the VoltSolar app report view. Key topology for this design:',
-    { size: 8.5 }
-  );
-  w.bullet(
-    `PV array ${calcs.solarArrayKw} kWp (${calcs.seriesCount ?? '-'}S × ${calcs.parallelCount ?? '-'}P) → DC protection → ${
-      calcs.inverterModelRecommended || 'inverter'
-    }`
-  );
-  w.bullet(
-    `Battery bank ${resolvedV}V / ${calcs.batteryCapacityAh}Ah (${calcs.batterySeriesCount ?? '-'}S × ${
-      calcs.batteryParallelCount ?? '-'
-    }P) → DC fuse/breaker → inverter`
-  );
-  w.bullet(
-    `Inverter ${calcs.inverterSizeKva} kVA AC output → AC protection / distribution → customer loads`
-  );
+  if (sldImage) {
+    w.image(sldImage.dataUrl, sldImage.width, sldImage.height);
+  } else {
+    w.body('SLD image could not be rendered. Topology summary:', { size: 8.5 });
+    w.bullet(
+      `PV array ${calcs.solarArrayKw} kWp (${calcs.seriesCount ?? '-'}S x ${calcs.parallelCount ?? '-'}P) -> DC protection -> ${
+        calcs.inverterModelRecommended || 'inverter'
+      }`
+    );
+    w.bullet(
+      `Battery bank ${resolvedV}V / ${calcs.batteryCapacityAh}Ah (${calcs.batterySeriesCount ?? '-'}S x ${
+        calcs.batteryParallelCount ?? '-'
+      }P) -> DC fuse/breaker -> inverter`
+    );
+    w.bullet(
+      `Inverter ${calcs.inverterSizeKva} kVA AC output -> AC protection / distribution -> customer loads`
+    );
+  }
   w.rule();
 
-  // ——— 9. Protection ———
+  // --- 9. Protection ---
   w.sectionTitle('9. Protection Device Schedule');
   const devices = calcs.protectionSchedule?.deviceDetails || [];
   if (devices.length === 0) {
@@ -565,7 +659,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
         d.device,
         d.calculatedCurrentA > 0 ? d.calculatedCurrentA.toFixed(1) : '-',
         (d.requiredCurrentA ?? 0) > 0 ? (d.requiredCurrentA ?? 0).toFixed(1) : '-',
-        `${d.safetyFactor}×`,
+        `${d.safetyFactor}x`,
         d.nearestStandardRating || '-',
         d.selectedRating
       ]),
@@ -574,7 +668,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   }
   w.rule();
 
-  // ——— 10. Cables ———
+  // --- 10. Cables ---
   w.sectionTitle('10. Cable Engineering Schedule');
   w.table(
     ['Cable Run', 'Spec', 'Req A', 'Ampacity', 'Util %', 'V Drop', 'Status'],
@@ -602,7 +696,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   );
   w.rule();
 
-  // ——— 11. Verification ———
+  // --- 11. Verification ---
   w.sectionTitle('11. Engineering Verification Notes');
   const warnings = calcs.validationWarnings || [];
   if (warnings.length === 0) {
@@ -626,7 +720,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   for (const reason of meta.confidenceReasons) w.bullet(reason);
   w.rule();
 
-  // ——— 12. Assumptions ———
+  // --- 12. Assumptions ---
   w.sectionTitle('12. Calculation Assumptions');
   const assumptions = calcs.assumptions || [];
   if (assumptions.length === 0) {
@@ -640,7 +734,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   }
   w.rule();
 
-  // ——— 13. Limitations ———
+  // --- 13. Limitations ---
   w.sectionTitle('13. Design Limitations');
   const limitations = [
     'System sizing assumes average meteorological Peak Sun Hours for the stated location.',
@@ -653,7 +747,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   for (const item of limitations) w.bullet(item);
   w.rule();
 
-  // ——— Appendix A ———
+  // --- Appendix A ---
   w.sectionTitle('A. Engineering Summary');
   w.kvGrid([
     { label: 'Continuous Load', value: `${(calcs.connectedLoad / 1000).toFixed(2)} kW` },
@@ -673,7 +767,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   ]);
   w.rule();
 
-  // ——— Appendix B ———
+  // --- Appendix B ---
   w.sectionTitle('B. Design Inputs');
   w.kvGrid([
     { label: 'Backup Time', value: `${backupHours} Hours` },
@@ -687,8 +781,8 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     { label: 'Peak Sun Hours Used', value: `${calcs.peakSunHoursUsed ?? 4.5} hrs` },
     { label: 'Safety Margin', value: `${meta.safetyMarginPercent}%` },
     { label: 'Future Expansion', value: `${meta.futureExpansionPercent}%` },
-    { label: 'Cold Design Ambient', value: `${meta.ambientColdC} °C` },
-    { label: 'Hot Cell Temperature', value: `${meta.ambientHotC} °C` },
+    { label: 'Cold Design Ambient', value: `${meta.ambientColdC} C` },
+    { label: 'Hot Cell Temperature', value: `${meta.ambientHotC} C` },
     { label: 'Preferred Panel Wattage', value: `${panelSize} Wp` },
     {
       label: 'Project Classification',
@@ -697,7 +791,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   ]);
   w.rule();
 
-  // ——— Appendix C ———
+  // --- Appendix C ---
   w.sectionTitle('C. Energy Flow Summary');
   w.kvGrid([
     { label: 'PV Generation', value: `${meta.energyFlow.pvGenerationKwh} kWh/day` },
@@ -718,7 +812,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   );
   w.rule();
 
-  // ——— 14. Passport ———
+  // --- 14. Passport ---
   w.sectionTitle('14. Design Passport');
   w.table(
     ['Check', 'Status'],
@@ -730,12 +824,12 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   );
   w.rule();
 
-  // ——— Footer block ———
+  // --- Footer block ---
   w.sectionTitle('Prepared By');
   w.body('VoltSolar Autonomous Engineering Engine', { bold: true });
   w.body(`Software Version ${SOFTWARE_VERSION}`);
   w.body(`Design ID ${designId}`);
-  w.body(`Standards: ${CALCULATION_STANDARDS.join(' · ')}`, { size: 8, color: COLORS.muted });
+  w.body(`Standards: ${CALCULATION_STANDARDS.join(' | ')}`, { size: 8, color: COLORS.muted });
   w.body(
     `Calculation Timestamp: ${issuedAt.toLocaleString('en-GB', {
       day: '2-digit',
