@@ -82,10 +82,11 @@ export function configureSolarStrings(
     }
   }
 
-  // Fallback if no clean factors found, use heuristics
+  // Fallback if no clean factors found, use heuristics — then bump total so S×P is exact
+  let resolvedPanelQuantity = panelQuantity;
   if (bestScore === -1) {
     if (mpptVocLimit === 150) {
-      seriesCount = Math.min(2, panelQuantity);
+      seriesCount = Math.min(2, Math.max(1, panelQuantity));
     } else if (mpptVocLimit === 450) {
       seriesCount = Math.min(8, Math.max(2, Math.floor(mpptVmpMax / specs.vmp)));
       // cap series count to fit Voc limit
@@ -93,9 +94,11 @@ export function configureSolarStrings(
         seriesCount--;
       }
     } else {
-      seriesCount = Math.min(12, panelQuantity);
+      seriesCount = Math.min(12, Math.max(1, panelQuantity));
     }
-    parallelCount = Math.ceil(panelQuantity / seriesCount);
+    parallelCount = Math.max(1, Math.ceil(panelQuantity / seriesCount));
+    // Critical: S×P must equal the published panel count (never claim 5 panels for 4S×1P)
+    resolvedPanelQuantity = seriesCount * parallelCount;
   }
 
   // 4. Electrical ratings of the configured PV string
@@ -125,7 +128,7 @@ export function configureSolarStrings(
     }
   }
 
-  const configString = `${seriesCount} Series × ${parallelCount} Parallel String Layout (${panelQuantity} Panels total)`;
+  const configString = `${seriesCount} Series × ${parallelCount} Parallel String Layout (${resolvedPanelQuantity} Panels total)`;
 
   return {
     seriesCount,

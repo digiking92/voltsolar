@@ -34,12 +34,15 @@ function overallPvEfficiency(
   batteryEff: number
 ): number {
   const { temperatureDeratingFactor, dustLossFactor, cableLossFactor } = SYSTEM_STANDARDS;
+  // Hybrid / off-grid reality: not all daily Wh cycle the battery.
+  // ~55% daytime direct AC use, ~45% through storage round-trip.
+  const storagePathFactor = 0.55 + 0.45 * batteryEff;
   return (
     (1 - temperatureDeratingFactor) *
     (1 - dustLossFactor) *
     (1 - cableLossFactor) *
     inverterEff *
-    batteryEff
+    storagePathFactor
   );
 }
 
@@ -79,7 +82,7 @@ export function runFullDesignCalculations(
       loadRes.connectedLoad,
       loadRes.peakLoad,
       inverterType
-    );
+    ).slice(0, 5); // Top ranked only — full catalog is still searched/ranked first
 
     for (const invRank of rankedInverters) {
       const inv = invRank.inverter;
@@ -93,27 +96,39 @@ export function runFullDesignCalculations(
         inv.efficiency,
         inv.maxBatteryDischargeCurrentA,
         inv.maxBatteryChargeCurrentA
-      );
+      )
+        .filter(b => b.batteryCurrentOk)
+        .slice(0, 3);
 
       for (const batt of batteryOptions) {
-        if (!batt.batteryCurrentOk) continue;
-
         const eff = overallPvEfficiency(inv.efficiency, batt.batteryEfficiency);
         const targetPvWatts = loadRes.dailyEnergy / (psh * eff);
 
-        for (const panel of panels) {
+        // Prefer requested wattage first; keep 1 alternate module family
+        const panelPool = [
+          panels[0],
+          ...panels.slice(1).filter(p => Math.abs(p.sizeW - panelSize) <= 100).slice(0, 1)
+        ].filter(Boolean);
+
+        for (const panel of panelPool) {
           const layouts = searchValidStringConfigurations(
             panel,
             inv,
             targetPvWatts,
             panel.sizeW === panelSize
-          );
+          ).slice(0, 4);
 
           for (const layout of layouts) {
+            if (layout.totalPanels !== layout.seriesCount * layout.parallelCount) continue;
+
             let score = invRank.score * 0.35 + batt.score * 0.25 + layout.score * 0.4;
             if (vSys === 48) score += 40;
             else if (vSys === 24) score += 20;
             if (panel.sizeW === panelSize) score += 30;
+            // Prefer energy-adequate, then the smallest overshoot
+            const ratio = layout.totalPvPowerW / Math.max(targetPvWatts, 1);
+            if (ratio < 0.999) score -= 400;
+            else score += Math.max(0, 50 - (ratio - 1) * 80);
 
             const pvChecks =
               `MPPT Current Compatible: YES (${layout.currentPerMppt}A ≤ ${inv.maxPvCurrent}A). ` +
@@ -158,19 +173,23 @@ export function runFullDesignCalculations(
   const inverterPowerW = inv.sizeKva * 1000;
 
   const protectionRes = sizeProtectionDevices(
-    layout.stringIscMax,
+    best.panel.isc,
+    layout.parallelCount,
+    best.panel.maxSeriesFuseA,
     layout.stringVocMax,
     resolvedSystemVoltage,
     inverterPowerW,
+    inv.phases ?? 1,
     projectType === 'commercial'
   );
 
   const cableRes = sizeSystemCables(
-    layout.stringIscMax,
+    best.panel.isc,
     layout.stringVmpNominal,
     protectionRes.calculationsRaw.maxInverterDcCurrent,
     resolvedSystemVoltage,
-    protectionRes.calculationsRaw.maxAcOutputCurrent
+    protectionRes.calculationsRaw.maxAcOutputCurrent,
+    inv.phases ?? 1
   );
 
   const batteryLayout = configureBatteryBank(
@@ -345,8 +364,9 @@ export function runFullDesignCalculations(
     inverterSizeKva: inv.sizeKva,
     inverterReason: best.inverterReason,
     solarArrayKw,
-    panelQuantity: layout.totalPanels,
-    panelConfiguration: layout.panelConfiguration,
+    // Always publish exact S×P product (guards against stale total fields)
+    panelQuantity: layout.seriesCount * layout.parallelCount,
+    panelConfiguration: `${layout.seriesCount} Series × ${layout.parallelCount} Parallel (${layout.seriesCount * layout.parallelCount} Panels total)`,
     estimatedDailyProductionKwh,
 
     continuousLoadW: loadRes.continuousLoadW,

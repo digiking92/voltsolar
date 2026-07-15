@@ -158,5 +158,9 @@ export const COPPER_CABLE_SPECS: CableSpec[] = [
 
 export function findRequiredCableSize(continuousCurrent: number): number {
   const found = COPPER_CABLE_SPECS.find(c => c.maxCurrentA >= continuousCurrent);
-  return found ? found.crossSectionMm2 : 120; // Default to maximum size if exceeding
+  if (!found) {
+    // Fail closed — caller must handle / parallel conductors (do not silently under-size)
+    return COPPER_CABLE_SPECS[COPPER_CABLE_SPECS.length - 1].crossSectionMm2 + 0.01;
+  }
+  return found.crossSectionMm2;
 }

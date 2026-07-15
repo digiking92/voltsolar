@@ -126,10 +126,14 @@ export function searchCompatibleInverters(
     else if (ratio > 1.4) score += Math.max(0, 50 - (ratio - 1.4) * 40);
     else score += ratio * 40;
 
-    if (inverterType !== 'auto' && inverter.topology === inverterType) score += 40;
-    if (inverter.topology === 'hybrid') score += 10;
+    // Prefer exact topology match; do not blanket-boost every hybrid
+    if (inverterType === 'off_grid' && inverter.topology === 'off_grid') score += 50;
+    else if (inverterType === 'hybrid' && inverter.topology === 'hybrid') score += 40;
+    else if (inverterType === 'grid_tie' && inverter.topology === 'hybrid') score += 35;
+    else if (inverterType === 'auto' && inverter.topology === 'hybrid') score += 8;
     score += Math.min(30, inverter.numMppts * 10);
-    score += Math.min(20, inverter.maxPvCurrent);
+    // Mild preference for adequate MPPT current — do not dominate brand choice
+    score += Math.min(8, inverter.maxPvCurrent * 0.25);
 
     const reason =
       `${inverter.brand} ${inverter.model} (${inverter.sizeKva} kVA) selected. ` +

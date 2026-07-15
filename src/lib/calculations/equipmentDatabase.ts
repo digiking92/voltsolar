@@ -7,6 +7,8 @@ export interface PanelSpecs {
   isc: number;
   imp: number;
   tempCoeffVoc: number; // %/°C, negative e.g. -0.30
+  /** Vmp temp coeff (%/°C); typically ~5–15% more negative than Voc coeff */
+  tempCoeffVmp?: number;
   maxSeriesFuseA: number;
   maxSystemVoltageV: number;
 }
@@ -28,6 +30,8 @@ export interface InverterSpecs {
   maxBatteryDischargeCurrentA: number;
   surgeFactor: number; // multiplier of continuous rating for brief surge
   topology: 'hybrid' | 'off_grid' | 'grid_tie';
+  /** AC output phases — drives AC current / breaker / cable math */
+  phases: 1 | 3;
 }
 
 export interface BatterySpecs {
@@ -103,6 +107,7 @@ export function getPanelFromDb(panelSizeW: number): PanelSpecs {
   );
 
   const factor = panelSizeW / closest.sizeW;
+  // Scale voltage ~√(P) and current ~√(P) approximately when keeping similar cell count family
   return {
     brand: 'Generic Solar',
     model: `Standard Mono-Si ${panelSizeW}W`,
@@ -112,6 +117,7 @@ export function getPanelFromDb(panelSizeW: number): PanelSpecs {
     isc: parseFloat((closest.isc * Math.sqrt(factor)).toFixed(2)),
     imp: parseFloat((closest.imp * Math.sqrt(factor)).toFixed(2)),
     tempCoeffVoc: closest.tempCoeffVoc,
+    tempCoeffVmp: closest.tempCoeffVmp ?? closest.tempCoeffVoc * 1.12,
     maxSeriesFuseA: closest.maxSeriesFuseA,
     maxSystemVoltageV: closest.maxSystemVoltageV
   };
@@ -124,42 +130,65 @@ export function getCandidatePanels(preferredSizeW: number): PanelSpecs[] {
 }
 
 export const INVERTERS: InverterSpecs[] = [
+  // --- 12 V / 24 V all-in-one (real integrated MPPT) — NOT Victron MultiPlus (no PV MPPT) ---
   {
-    brand: 'Victron Energy',
-    model: 'MultiPlus-II 12/1200',
+    brand: 'MUST',
+    model: 'PV1800 VPM 1.2kVA / 12V',
     sizeKva: 1.2,
     voltageV: 12,
-    mpptVocLimit: 75,
+    mpptVocLimit: 105,
     mpptVmpMin: 15,
-    mpptVmpMax: 65,
-    maxPvCurrent: 35,
-    maxPvPower: 1000,
+    mpptVmpMax: 80,
+    maxPvCurrent: 40,
+    maxPvPower: 800,
     numMppts: 1,
-    maxStringsPerMppt: 2,
-    efficiency: 0.95,
+    maxStringsPerMppt: 1,
+    efficiency: 0.90,
     maxBatteryChargeCurrentA: 50,
     maxBatteryDischargeCurrentA: 100,
     surgeFactor: 2.0,
-    topology: 'hybrid'
+    topology: 'off_grid',
+    phases: 1
   },
   {
-    brand: 'Victron Energy',
-    model: 'MultiPlus-II 24/3000',
+    brand: 'MUST',
+    model: 'PV1800 VPM 3kVA / 24V',
     sizeKva: 3.0,
     voltageV: 24,
-    mpptVocLimit: 150,
+    mpptVocLimit: 145,
     mpptVmpMin: 30,
-    mpptVmpMax: 120,
-    maxPvCurrent: 35,
-    maxPvPower: 3000,
+    mpptVmpMax: 115,
+    maxPvCurrent: 60,
+    maxPvPower: 2400,
     numMppts: 1,
     maxStringsPerMppt: 2,
-    efficiency: 0.96,
-    maxBatteryChargeCurrentA: 70,
-    maxBatteryDischargeCurrentA: 140,
+    efficiency: 0.93,
+    maxBatteryChargeCurrentA: 60,
+    maxBatteryDischargeCurrentA: 125,
     surgeFactor: 2.0,
-    topology: 'hybrid'
+    topology: 'off_grid',
+    phases: 1
   },
+  {
+    brand: 'Growatt',
+    model: 'SPF 3000TL HVM 3kVA / 24V Off-Grid',
+    sizeKva: 3.0,
+    voltageV: 24,
+    mpptVocLimit: 145,
+    mpptVmpMin: 30,
+    mpptVmpMax: 115,
+    maxPvCurrent: 50,
+    maxPvPower: 4000,
+    numMppts: 1,
+    maxStringsPerMppt: 2,
+    efficiency: 0.93,
+    maxBatteryChargeCurrentA: 60,
+    maxBatteryDischargeCurrentA: 120,
+    surgeFactor: 2.0,
+    topology: 'off_grid',
+    phases: 1
+  },
+  // --- 48 V hybrid / off-grid multi-brand ---
   {
     brand: 'Deye',
     model: 'SUN-5K-SG01LP1 Hybrid 5kVA',
@@ -176,7 +205,65 @@ export const INVERTERS: InverterSpecs[] = [
     maxBatteryChargeCurrentA: 120,
     maxBatteryDischargeCurrentA: 120,
     surgeFactor: 2.0,
-    topology: 'hybrid'
+    topology: 'hybrid',
+    phases: 1
+  },
+  {
+    brand: 'Luxpower',
+    model: 'LXP 5K Hybrid 5kVA',
+    sizeKva: 5.0,
+    voltageV: 48,
+    mpptVocLimit: 500,
+    mpptVmpMin: 120,
+    mpptVmpMax: 430,
+    maxPvCurrent: 14,
+    maxPvPower: 6500,
+    numMppts: 2,
+    maxStringsPerMppt: 1,
+    efficiency: 0.97,
+    maxBatteryChargeCurrentA: 100,
+    maxBatteryDischargeCurrentA: 110,
+    surgeFactor: 2.0,
+    topology: 'hybrid',
+    phases: 1
+  },
+  {
+    brand: 'Solis',
+    model: 'S6-EH1P6K-L Hybrid 6kVA',
+    sizeKva: 6.0,
+    voltageV: 48,
+    mpptVocLimit: 600,
+    mpptVmpMin: 90,
+    mpptVmpMax: 520,
+    maxPvCurrent: 16,
+    maxPvPower: 9600,
+    numMppts: 2,
+    maxStringsPerMppt: 2,
+    efficiency: 0.975,
+    maxBatteryChargeCurrentA: 135,
+    maxBatteryDischargeCurrentA: 135,
+    surgeFactor: 2.0,
+    topology: 'hybrid',
+    phases: 1
+  },
+  {
+    brand: 'GoodWe',
+    model: 'GW5048-EM Hybrid 5kVA',
+    sizeKva: 5.0,
+    voltageV: 48,
+    mpptVocLimit: 580,
+    mpptVmpMin: 125,
+    mpptVmpMax: 550,
+    maxPvCurrent: 12.5,
+    maxPvPower: 6500,
+    numMppts: 2,
+    maxStringsPerMppt: 1,
+    efficiency: 0.97,
+    maxBatteryChargeCurrentA: 100,
+    maxBatteryDischargeCurrentA: 100,
+    surgeFactor: 2.0,
+    topology: 'hybrid',
+    phases: 1
   },
   {
     brand: 'Growatt',
@@ -194,7 +281,8 @@ export const INVERTERS: InverterSpecs[] = [
     maxBatteryChargeCurrentA: 160,
     maxBatteryDischargeCurrentA: 160,
     surgeFactor: 2.0,
-    topology: 'hybrid'
+    topology: 'hybrid',
+    phases: 1
   },
   {
     brand: 'Growatt',
@@ -212,7 +300,8 @@ export const INVERTERS: InverterSpecs[] = [
     maxBatteryChargeCurrentA: 190,
     maxBatteryDischargeCurrentA: 190,
     surgeFactor: 2.0,
-    topology: 'hybrid'
+    topology: 'hybrid',
+    phases: 1
   },
   {
     brand: 'Deye',
@@ -230,7 +319,27 @@ export const INVERTERS: InverterSpecs[] = [
     maxBatteryChargeCurrentA: 190,
     maxBatteryDischargeCurrentA: 190,
     surgeFactor: 2.0,
-    topology: 'hybrid'
+    topology: 'hybrid',
+    phases: 1
+  },
+  {
+    brand: 'Luxpower',
+    model: 'LXP 12K Hybrid 12kVA',
+    sizeKva: 12.0,
+    voltageV: 48,
+    mpptVocLimit: 500,
+    mpptVmpMin: 120,
+    mpptVmpMax: 430,
+    maxPvCurrent: 25,
+    maxPvPower: 15600,
+    numMppts: 2,
+    maxStringsPerMppt: 2,
+    efficiency: 0.97,
+    maxBatteryChargeCurrentA: 240,
+    maxBatteryDischargeCurrentA: 250,
+    surgeFactor: 2.0,
+    topology: 'hybrid',
+    phases: 1
   },
   {
     brand: 'Deye',
@@ -248,7 +357,8 @@ export const INVERTERS: InverterSpecs[] = [
     maxBatteryChargeCurrentA: 240,
     maxBatteryDischargeCurrentA: 240,
     surgeFactor: 2.0,
-    topology: 'hybrid'
+    topology: 'hybrid',
+    phases: 3
   },
   {
     brand: 'Felicity Solar',
@@ -266,7 +376,27 @@ export const INVERTERS: InverterSpecs[] = [
     maxBatteryChargeCurrentA: 100,
     maxBatteryDischargeCurrentA: 110,
     surgeFactor: 2.0,
-    topology: 'off_grid'
+    topology: 'off_grid',
+    phases: 1
+  },
+  {
+    brand: 'SRNE',
+    model: 'HF4850S80-H Off-Grid 5kVA',
+    sizeKva: 5.0,
+    voltageV: 48,
+    mpptVocLimit: 500,
+    mpptVmpMin: 120,
+    mpptVmpMax: 450,
+    maxPvCurrent: 18,
+    maxPvPower: 5000,
+    numMppts: 1,
+    maxStringsPerMppt: 2,
+    efficiency: 0.94,
+    maxBatteryChargeCurrentA: 80,
+    maxBatteryDischargeCurrentA: 100,
+    surgeFactor: 2.0,
+    topology: 'off_grid',
+    phases: 1
   },
   {
     brand: 'Felicity Solar',
@@ -284,8 +414,9 @@ export const INVERTERS: InverterSpecs[] = [
     maxBatteryChargeCurrentA: 200,
     maxBatteryDischargeCurrentA: 280,
     surgeFactor: 2.0,
-    topology: 'off_grid'
-  }
+    topology: 'off_grid',
+    phases: 1
+  },
 ];
 
 export function getInvertersForVoltage(
@@ -294,8 +425,16 @@ export function getInvertersForVoltage(
 ): InverterSpecs[] {
   return INVERTERS.filter(inv => {
     if (inv.voltageV !== systemVoltage) return false;
-    if (inverterType === 'auto') return true;
-    return inv.topology === inverterType || inv.topology === 'hybrid';
+    if (inverterType === 'auto') {
+      return inv.topology === 'hybrid' || inv.topology === 'off_grid';
+    }
+    // This tool sizes battery-backed systems. "Grid-tie" maps to hybrid (grid + battery),
+    // not export-only string inverters without a battery bus.
+    if (inverterType === 'grid_tie') {
+      return inv.topology === 'hybrid';
+    }
+    // Exact topology — never silently mix off-grid with hybrids
+    return inv.topology === inverterType;
   }).sort((a, b) => a.sizeKva - b.sizeKva);
 }
 

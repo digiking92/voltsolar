@@ -48,7 +48,9 @@ function temperatureAdjustedVoc(panel: PanelSpecs): number {
 
 function temperatureAdjustedVmpHot(panel: PanelSpecs): number {
   const { maxCellTempC, stcTempC } = SYSTEM_STANDARDS;
-  return panel.vmp * (1 + (panel.tempCoeffVoc * (maxCellTempC - stcTempC)) / 100);
+  // Vmp coeff is typically more negative than Voc — never use Voc coeff alone
+  const betaVmp = panel.tempCoeffVmp ?? panel.tempCoeffVoc * 1.12;
+  return panel.vmp * (1 + (betaVmp * (maxCellTempC - stcTempC)) / 100);
 }
 
 /**
@@ -154,9 +156,37 @@ export function validateStringConfiguration(
   };
 }
 
+function scoreLayout(
+  checked: StringValidationResult,
+  targetPvWatts: number,
+  preferredWattageMatch: boolean,
+  numMppts: number
+): number {
+  const target = Math.max(targetPvWatts, 1);
+  const sizingRatio = checked.totalPvPowerW / target;
+  let score = 50;
+  if (preferredWattageMatch) score += 200;
+
+  if (sizingRatio >= 0.999 && sizingRatio <= 1.25) {
+    // Meet target with minimal oversize
+    score += 220 - (sizingRatio - 1) * 120;
+  } else if (sizingRatio > 1.25) {
+    score += Math.max(0, 140 - (sizingRatio - 1.25) * 90);
+  } else {
+    // Undersized — heavily penalized so 4S×1P never beats a valid 5-panel layout
+    score += sizingRatio * 40 - 250;
+  }
+
+  // Prefer fewer panels once energy is covered (or closest under target as last resort)
+  score += Math.max(0, 60 - checked.totalPanels);
+  if (checked.parallelCount % numMppts === 0) score += 25;
+  return score;
+}
+
 /**
  * Search only electrically valid S×P layouts for a panel/inverter pair.
  * Prefer layouts that meet or slightly exceed the PV energy target.
+ * Always publishes total panels = series × parallel.
  */
 export function searchValidStringConfigurations(
   panel: PanelSpecs,
@@ -171,24 +201,15 @@ export function searchValidStringConfigurations(
   if (maxS < 1 || minS > maxS) return [];
 
   const maxP = inverter.numMppts * inverter.maxStringsPerMppt;
-  const results: PanelConfigurationResult[] = [];
+  const allValid: PanelConfigurationResult[] = [];
 
   for (let s = minS; s <= maxS; s++) {
     for (let p = 1; p <= maxP; p++) {
       const checked = validateStringConfiguration(panel, inverter, s, p);
       if (!checked.valid) continue;
+      if (checked.totalPanels !== s * p) continue;
 
-      const sizingRatio = checked.totalPvPowerW / Math.max(targetPvWatts, 1);
-      let score = 50;
-      if (preferredWattageMatch) score += 200;
-      if (sizingRatio >= 1.0 && sizingRatio <= 1.25) score += 150;
-      else if (sizingRatio > 1.25) score += Math.max(0, 100 - (sizingRatio - 1.25) * 80);
-      else score += Math.max(0, sizingRatio * 80);
-
-      // Prefer balanced MPPT loading
-      if (p % inverter.numMppts === 0) score += 25;
-
-      results.push({
+      allValid.push({
         ...checked,
         panelConfiguration: `${s} Series × ${p} Parallel (${checked.totalPanels} Panels total)`,
         panelVoc: panel.voc,
@@ -205,10 +226,15 @@ export function searchValidStringConfigurations(
         panelSizingCompatibilityOk: true,
         panelSizingCompatibilityWarning:
           'Selected PV array configuration is fully compatible with inverter MPPT specifications.',
-        score
+        score: scoreLayout(checked, targetPvWatts, preferredWattageMatch, inverter.numMppts)
       });
     }
   }
 
-  return results.sort((a, b) => b.score - a.score);
+  const meetingTarget = allValid.filter(
+    r => r.totalPvPowerW >= targetPvWatts * 0.999
+  );
+  // Prefer energy-adequate layouts; only fall back if none exist for this pair
+  const pool = meetingTarget.length > 0 ? meetingTarget : allValid;
+  return pool.sort((a, b) => b.score - a.score);
 }

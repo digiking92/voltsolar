@@ -111,11 +111,13 @@ export function runConsistencyAudit(input: ConsistencyAuditInput): ConsistencyAu
     );
   }
 
-  const pvDesignCurrent = input.stringIscMax * SYSTEM_STANDARDS.necBreakerMultiplier;
+  // PV string cable is sized on ONE string Isc, not paralleled array current
+  const moduleIsc = input.stringIscMax / Math.max(1, input.parallelCount);
+  const pvDesignCurrent = moduleIsc * SYSTEM_STANDARDS.necBreakerMultiplier;
   const pvAmpacity = cableAmpacity(input.pvCableAreaMm2);
   if (pvDesignCurrent > pvAmpacity) {
     errors.push(
-      `PV design current ${pvDesignCurrent.toFixed(1)}A exceeds PV cable ampacity ${pvAmpacity}A.`
+      `PV string design current ${pvDesignCurrent.toFixed(1)}A exceeds PV cable ampacity ${pvAmpacity}A.`
     );
   }
 
@@ -127,7 +129,11 @@ export function runConsistencyAudit(input: ConsistencyAuditInput): ConsistencyAu
     );
   }
 
-  const acCurrent = (input.inverter.sizeKva * 1000) / SYSTEM_STANDARDS.acNominalVoltageV;
+  const phases = input.inverter.phases ?? 1;
+  const acCurrent =
+    phases === 3
+      ? (input.inverter.sizeKva * 1000) / (Math.sqrt(3) * 400)
+      : (input.inverter.sizeKva * 1000) / SYSTEM_STANDARDS.acNominalVoltageV;
   const acDesign = acCurrent * SYSTEM_STANDARDS.necBreakerMultiplier;
   const acAmpacity = cableAmpacity(input.acCableAreaMm2);
   if (acDesign > acAmpacity) {
@@ -271,11 +277,13 @@ export function buildDesignNotes(params: {
     });
   }
 
-  const minPvKw = (dailyKwh + params.batteryUsableKwh) / params.peakSunHours;
-  if (params.solarArrayKw < minPvKw) {
+  // Cover daily load + ~one night of usable battery energy across a poor sun day (not both stacked raw)
+  const recoveryKwh = dailyKwh + params.batteryUsableKwh * 0.35;
+  const minPvKw = recoveryKwh / Math.max(params.peakSunHours, 0.1);
+  if (params.solarArrayKw + 0.05 < minPvKw) {
     notes.push({
       level: 'warning',
-      message: `Recharge headroom is limited: array ${params.solarArrayKw} kWp vs recommended ≥${minPvKw.toFixed(2)} kWp for load + battery recovery.`,
+      message: `Recharge headroom is limited: array ${params.solarArrayKw} kWp vs ~${minPvKw.toFixed(2)} kWp advised for daily load + partial battery recovery.`,
       suggestion: 'Add parallel strings or a higher-wattage panel if roof space allows.'
     });
   }

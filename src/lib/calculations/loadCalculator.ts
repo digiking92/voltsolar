@@ -37,8 +37,11 @@ export function calculateLoadSchedule(appliances: ProjectAppliance[]): LoadCalcu
     
     connectedLoad += totalWatts;
 
-    // Use centralized engineering surge multipliers
-    const surgeMultiplier = getSurgeMultiplier(app.applianceName);
+    // Prefer explicit surge (custom appliances); else name-based engineering table
+    const surgeMultiplier =
+      typeof app.surgeMultiplier === 'number' && app.surgeMultiplier > 0
+        ? app.surgeMultiplier
+        : getSurgeMultiplier(app.applianceName);
     const itemPeakLoad = totalWatts * surgeMultiplier;
     
     peakLoad += itemPeakLoad;

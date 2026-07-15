@@ -15,6 +15,8 @@ interface AppContextType {
     phone: string,
     password?: string
   ) => Promise<boolean>;
+  requestPasswordReset: (email: string) => Promise<void>;
+  updatePassword: (password: string) => Promise<void>;
   logout: () => void;
   addProject: (project: Omit<Project, 'id' | 'userId' | 'createdAt'>) => Promise<Project>;
   updateProject: (project: Project) => Promise<void>;
@@ -139,7 +141,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       password
     });
 
-    if (error) throw error;
+    if (error) {
+      if (/invalid login credentials/i.test(error.message)) {
+        throw new Error(
+          'Invalid email or password. Use Forgot? to reset your password, or sign up if you do not have an account yet.'
+        );
+      }
+      throw error;
+    }
     if (!data.user) throw new Error('Authentication failed.');
 
     const profile = await supabaseApi.getProfile(data.user.id);
@@ -224,6 +233,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProjects([]);
     localStorage.setItem('voltsolar_projects', JSON.stringify([]));
     return true;
+  };
+
+  const requestPasswordReset = async (email: string): Promise<void> => {
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed) {
+      throw new Error('Enter the email address for your VoltSolar account.');
+    }
+
+    const redirectTo = `${window.location.origin}/reset-password`;
+    const { error } = await supabase.auth.resetPasswordForEmail(trimmed, {
+      redirectTo
+    });
+
+    if (error) throw error;
+  };
+
+  const updatePassword = async (password: string): Promise<void> => {
+    if (!password || password.length < 6) {
+      throw new Error('Password must be at least 6 characters.');
+    }
+
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) throw error;
   };
 
   const requireSessionUserId = async (): Promise<string> => {
@@ -384,6 +416,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         authReady,
         login,
         signup,
+        requestPasswordReset,
+        updatePassword,
         logout,
         addProject,
         updateProject,

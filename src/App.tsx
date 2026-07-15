@@ -7,6 +7,7 @@ import { ContactPage } from './features/contact/ContactPage';
 import { PrivacyPage } from './features/legal/PrivacyPage';
 import { TermsPage } from './features/legal/TermsPage';
 import { AuthPage } from './features/auth/AuthPage';
+import { ResetPasswordPage } from './features/auth/ResetPasswordPage';
 import { Layout } from './components/Layout';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { ProjectsListPage } from './features/projects/ProjectsListPage';
@@ -137,17 +138,18 @@ function ContactRoute() {
   );
 }
 
-function AuthRoute({ mode }: { mode: 'login' | 'signup' }) {
+function AuthRoute({ mode }: { mode: 'login' | 'signup' | 'forgot' }) {
   const { isAuthenticated, authReady } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as { from?: string } | null)?.from || '/app';
 
   useEffect(() => {
-    if (authReady && isAuthenticated) {
+    // Don't bounce away during forgot-password — user may already have a stale session
+    if (authReady && isAuthenticated && mode !== 'forgot') {
       navigate(from.startsWith('/app') ? from : '/app', { replace: true });
     }
-  }, [authReady, isAuthenticated, navigate, from]);
+  }, [authReady, isAuthenticated, navigate, from, mode]);
 
   if (!authReady) {
     return (
@@ -157,7 +159,7 @@ function AuthRoute({ mode }: { mode: 'login' | 'signup' }) {
     );
   }
 
-  if (isAuthenticated) {
+  if (isAuthenticated && mode !== 'forgot') {
     return <Navigate to="/app" replace />;
   }
 
@@ -165,6 +167,17 @@ function AuthRoute({ mode }: { mode: 'login' | 'signup' }) {
     <AuthPage
       initialMode={mode}
       onBack={() => navigate('/')}
+      onSuccess={() => navigate('/app', { replace: true })}
+    />
+  );
+}
+
+function ResetPasswordRoute() {
+  const navigate = useNavigate();
+
+  return (
+    <ResetPasswordPage
+      onBack={() => navigate('/login')}
       onSuccess={() => navigate('/app', { replace: true })}
     />
   );
@@ -284,6 +297,8 @@ function MainApp() {
         />
         <Route path="/login" element={<AuthRoute mode="login" />} />
         <Route path="/signup" element={<AuthRoute mode="signup" />} />
+        <Route path="/forgot-password" element={<AuthRoute mode="forgot" />} />
+        <Route path="/reset-password" element={<ResetPasswordRoute />} />
         <Route
           path="/app/*"
           element={

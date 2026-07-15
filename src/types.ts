@@ -47,6 +47,8 @@ export interface ProjectAppliance {
   customWattage: number;
   quantity: number;
   hoursUsed: number; // per day
+  /** When set (e.g. custom appliances), overrides name-based surge lookup */
+  surgeMultiplier?: number;
 }
 
 export interface Calculations {
