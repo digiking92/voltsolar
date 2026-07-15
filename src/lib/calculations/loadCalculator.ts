@@ -22,7 +22,6 @@ export interface LoadCalculationResult {
 
 export function calculateLoadSchedule(appliances: ProjectAppliance[]): LoadCalculationResult {
   let connectedLoad = 0;
-  let peakLoad = 0;
   let dailyEnergy = 0;
   let continuousLoadW = 0;
   let motorStartupLoadW = 0;
@@ -44,7 +43,6 @@ export function calculateLoadSchedule(appliances: ProjectAppliance[]): LoadCalcu
         : getSurgeMultiplier(app.applianceName);
     const itemPeakLoad = totalWatts * surgeMultiplier;
     
-    peakLoad += itemPeakLoad;
     dailyEnergy += totalWatts * hours;
 
     if (surgeMultiplier > 1.2) {
@@ -67,18 +65,20 @@ export function calculateLoadSchedule(appliances: ProjectAppliance[]): LoadCalcu
 
   // Apply a diversity factor for simultaneous usage (standard engineering practice: 0.8)
   const diversityFactor = 0.8;
-  // Sizing standard peak design load
-  const designLoadW = (connectedLoad * diversityFactor) + motorStartupLoadW;
+  // Design peak = diversified continuous + motor startups.
+  // Do NOT treat peak as the sum of every appliance at locked-rotor at once —
+  // that overstates demand and falsely blocks valid residential designs.
+  const designLoadW = Math.round(connectedLoad * diversityFactor + motorStartupLoadW);
 
   return {
     connectedLoad,
-    peakLoad,
+    peakLoad: designLoadW,
     dailyEnergy,
     monthlyEnergy,
     continuousLoadW,
     motorStartupLoadW,
     diversityFactor,
-    designLoadW: Math.round(designLoadW),
+    designLoadW,
     loadBreakdown,
   };
 }

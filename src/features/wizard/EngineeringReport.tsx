@@ -382,7 +382,10 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           </div>
           <div className="p-3 border border-slate-100 rounded-xl">
             <span className="text-slate-600 block text-[11px] font-semibold">Configuration</span>
-            <p className="font-bold text-[#156DB7] mt-1">{calcs.batteryConfiguration}</p>
+            <p className="font-bold text-[#156DB7] mt-1">
+              {calcs.batterySeriesCount ?? '-'}S × {calcs.batteryParallelCount ?? '-'}P · {calcs.batteryQuantity} total
+            </p>
+            <p className="text-[10px] text-slate-500 mt-1">{calcs.batteryConfiguration}</p>
           </div>
           <div className="p-3 border border-slate-100 rounded-xl">
             <span className="text-slate-600 block text-[11px] font-semibold">Utilization</span>
@@ -403,7 +406,7 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           <div className="p-3 border border-slate-100 rounded-xl">
             <span className="text-slate-600 block text-[11px] font-semibold">Quantity / Chemistry</span>
             <p className="font-bold text-slate-800 mt-1">
-              {calcs.batteryQuantity} × {meta.chemistryLabel}
+              {calcs.batteryQuantity} total × {meta.chemistryLabel}
             </p>
           </div>
         </div>
@@ -452,6 +455,37 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             <p className="text-base font-extrabold text-slate-800">{calcs.inverterModelRecommended}</p>
             <p className="text-sm font-bold text-[#156DB7]">{calcs.inverterSizeKva} kVA · {meta.topologyLabel}</p>
             <p className="text-[11px] text-slate-500 leading-relaxed pt-2">{calcs.inverterReason}</p>
+            <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-100 text-[11px] text-slate-600 leading-relaxed space-y-1.5">
+              <p className="font-bold text-slate-800">MPPT / charge controller</p>
+              {inverterType === 'off_grid' ? (
+                <p>
+                  This off-grid pick is an <span className="font-semibold">all-in-one (AIO) with built-in MPPT</span>.
+                  You do <span className="font-semibold">not</span> need a separate solar charge controller for this design —
+                  PV strings connect to the unit’s PV/MPPT terminals.
+                </p>
+              ) : (
+                <p>
+                  This recommendation uses a <span className="font-semibold">hybrid / AIO with built-in MPPT(s)</span>.
+                  You do <span className="font-semibold">not</span> buy a separate MPPT for the array in this design.
+                </p>
+              )}
+              <p>
+                <span className="font-semibold">Array → MPPT window: </span>
+                cold Voc ≤ <span className="font-mono font-bold">{calcs.stringVocMax ?? '—'} V</span>
+                {calcs.mpptVocLimit != null ? <> (inverter max {calcs.mpptVocLimit} V)</> : null}
+                {' · '}
+                string Vmp ~ <span className="font-mono font-bold">{calcs.stringVmpMax ?? '—'} V</span>
+                {' · '}
+                current ~ <span className="font-mono font-bold">{calcs.currentPerMpptA ?? '—'} A</span>
+                {calcs.maxPvCurrentA != null ? <> / limit {calcs.maxPvCurrentA} A</> : null}.
+              </p>
+              <p className="text-slate-500">
+                Only if you swap to a bare inverter/charger <span className="italic">without</span> PV input: buy an external
+                MPPT with Voc class above cold string Voc
+                (≥ {calcs.stringVocMax ? Math.ceil(Number(calcs.stringVocMax) / 50) * 50 : '—'} V),
+                battery voltage {resolvedV} V, and charge current ≥ ~{(calcs.batteryMaxChargeCurrentA ?? 0).toFixed(0)} A.
+              </p>
+            </div>
           </div>
           <div className="p-4 border border-slate-100 rounded-2xl">
             <span className="text-[11px] font-semibold text-slate-600 tracking-wide block mb-3">Validation Checklist</span>

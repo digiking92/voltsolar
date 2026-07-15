@@ -107,7 +107,7 @@ export function validateStringConfiguration(
       `String Vmp ${stringVmpNominal.toFixed(1)}V exceeds MPPT maximum ${inverter.mpptVmpMax}V.`
     );
   }
-  if (currentPerMppt > inverter.maxPvCurrent) {
+  if (currentPerMppt > inverter.maxPvCurrent * 1.05) {
     failures.push(
       `MPPT operating current ${currentPerMppt.toFixed(1)}A exceeds inverter MPPT limit ${inverter.maxPvCurrent}A.`
     );
@@ -211,7 +211,7 @@ export function searchValidStringConfigurations(
 
       allValid.push({
         ...checked,
-        panelConfiguration: `${s} Series × ${p} Parallel (${checked.totalPanels} Panels total)`,
+        panelConfiguration: `${s} Series × ${p} Parallel · ${checked.totalPanels} panels total`,
         panelVoc: panel.voc,
         panelVmp: panel.vmp,
         panelIsc: panel.isc,

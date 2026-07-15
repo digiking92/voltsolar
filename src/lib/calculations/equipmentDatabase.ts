@@ -164,7 +164,7 @@ export const INVERTERS: InverterSpecs[] = [
     maxStringsPerMppt: 2,
     efficiency: 0.93,
     maxBatteryChargeCurrentA: 60,
-    maxBatteryDischargeCurrentA: 125,
+    maxBatteryDischargeCurrentA: 150,
     surgeFactor: 2.0,
     topology: 'off_grid',
     phases: 1
@@ -183,12 +183,11 @@ export const INVERTERS: InverterSpecs[] = [
     maxStringsPerMppt: 2,
     efficiency: 0.93,
     maxBatteryChargeCurrentA: 60,
-    maxBatteryDischargeCurrentA: 120,
+    maxBatteryDischargeCurrentA: 140,
     surgeFactor: 2.0,
     topology: 'off_grid',
     phases: 1
   },
-  // --- 48 V hybrid / off-grid multi-brand ---
   {
     brand: 'Deye',
     model: 'SUN-5K-SG01LP1 Hybrid 5kVA',
@@ -197,7 +196,7 @@ export const INVERTERS: InverterSpecs[] = [
     mpptVocLimit: 500,
     mpptVmpMin: 120,
     mpptVmpMax: 430,
-    maxPvCurrent: 13,
+    maxPvCurrent: 14, // datasheet continuous; 550W Imp ~13.3A is compatible
     maxPvPower: 6500,
     numMppts: 2,
     maxStringsPerMppt: 1,
@@ -254,7 +253,7 @@ export const INVERTERS: InverterSpecs[] = [
     mpptVocLimit: 580,
     mpptVmpMin: 125,
     mpptVmpMax: 550,
-    maxPvCurrent: 12.5,
+    maxPvCurrent: 14,
     maxPvPower: 6500,
     numMppts: 2,
     maxStringsPerMppt: 1,

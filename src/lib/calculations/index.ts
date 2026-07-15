@@ -161,7 +161,7 @@ export function runFullDesignCalculations(
 
   if (candidates.length === 0) {
     throw new Error(
-      'Engineering Validation Failed: No compatible panel, inverter, and battery combination satisfies the electrical, thermal, and capacity constraints. Try a different inverter type, panel wattage, battery chemistry, or system voltage.'
+      'Engineering Validation Failed: No compatible panel, inverter, and battery combination satisfies the electrical constraints with your current selections. Tip: set Inverter to Auto Recommend, System Voltage to Auto, and Panel to 550 Wp, then try again — or reduce motor/AC run hours.'
     );
   }
 
@@ -366,7 +366,7 @@ export function runFullDesignCalculations(
     solarArrayKw,
     // Always publish exact S×P product (guards against stale total fields)
     panelQuantity: layout.seriesCount * layout.parallelCount,
-    panelConfiguration: `${layout.seriesCount} Series × ${layout.parallelCount} Parallel (${layout.seriesCount * layout.parallelCount} Panels total)`,
+    panelConfiguration: `${layout.seriesCount} Series × ${layout.parallelCount} Parallel · ${layout.seriesCount * layout.parallelCount} panels total`,
     estimatedDailyProductionKwh,
 
     continuousLoadW: loadRes.continuousLoadW,

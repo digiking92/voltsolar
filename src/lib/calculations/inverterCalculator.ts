@@ -104,12 +104,20 @@ export function searchCompatibleInverters(
     peakLoadW
   );
 
-  const pool = getInvertersForVoltage(systemVoltage, inverterType);
+  let pool = getInvertersForVoltage(systemVoltage, inverterType);
+  // If a strict topology has no SKUs at this voltage, fall back to workable battery-backed units
+  if (pool.length === 0 && inverterType !== 'auto') {
+    pool = getInvertersForVoltage(systemVoltage, 'auto');
+  }
+
   const ranked: RankedInverter[] = [];
 
   for (const inverter of pool) {
+    // Size battery DC demand from actual continuous load (+ margin), not full nameplate —
+    // otherwise 24V 3kVA units are falsely rejected (e.g. 134A > 125A limit).
     const drawA =
-      (inverter.sizeKva * 1000) / (systemVoltage * inverter.efficiency);
+      (connectedLoadW * SYSTEM_STANDARDS.inverterSafetyFactor) /
+      (systemVoltage * inverter.efficiency);
     const validation = validateInverterAgainstLoads(
       inverter,
       systemVoltage,
@@ -131,6 +139,9 @@ export function searchCompatibleInverters(
     else if (inverterType === 'hybrid' && inverter.topology === 'hybrid') score += 40;
     else if (inverterType === 'grid_tie' && inverter.topology === 'hybrid') score += 35;
     else if (inverterType === 'auto' && inverter.topology === 'hybrid') score += 8;
+    else if (inverterType !== 'auto' && inverter.topology !== inverterType && inverterType !== 'grid_tie')
+      score -= 25; // fallback SKUs from empty-pool recovery
+
     score += Math.min(30, inverter.numMppts * 10);
     // Mild preference for adequate MPPT current — do not dominate brand choice
     score += Math.min(8, inverter.maxPvCurrent * 0.25);

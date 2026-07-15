@@ -160,7 +160,7 @@ export function searchBatteryConfigurations(
       batteryTargetInstalledKwh: parseFloat(energy.targetInstalledKwh.toFixed(2)),
       batteryCapacityAh: installedAh,
       batteryQuantity: quantity,
-      batteryConfiguration: `${seriesCount} Series × ${parallelCount} Parallel (${quantity} × ${unit.voltage}V ${unit.capacityAh}Ah)`,
+      batteryConfiguration: `${seriesCount} Series × ${parallelCount} Parallel · ${quantity} total (${quantity} × ${unit.voltage}V ${unit.capacityAh}Ah)`,
       batteryProductModel: `${unit.brand} ${unit.model} [${unit.capacityKwh.toFixed(2)} kWh/unit]`,
       batteryUnitCapacityAh: unit.capacityAh,
       batteryUnitVoltage: unit.voltage,

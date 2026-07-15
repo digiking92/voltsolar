@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   User, Building, Phone, Mail, MapPin, Sparkles, Plus, Minus, Search, 
   Trash2, ArrowLeft, ArrowRight, Zap, Battery, Sun, Cpu, ShieldCheck, 
-  Info, Edit, Printer, AlertTriangle, Download
+  Info, Edit, Printer, AlertTriangle, Download, ChevronDown
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { DEFAULT_APPLIANCES } from '../../data/appliances';
@@ -41,6 +41,7 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
   const [customAppHours, setCustomAppHours] = useState('4');
   const [customSurge, setCustomSurge] = useState('1.2');
   const [customError, setCustomError] = useState<string | null>(null);
+  const [customOpen, setCustomOpen] = useState(false);
 
   // Step 4: Backup Hours
   const [backupHours, setBackupHours] = useState<number>(8);
@@ -635,102 +636,117 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     })}
                 </div>
 
-                {/* Custom appliance (not in catalog) */}
-                <div className="pt-5 border-t border-slate-100 space-y-3">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-800">Add a custom appliance</h3>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      Not in the list? Enter the name, wattage, and daily hours yourself.
-                    </p>
-                  </div>
-
-                  {customError && (
-                    <p className="text-[11px] text-rose-600 font-medium">{customError}</p>
-                  )}
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="sm:col-span-2">
-                      <label htmlFor="custom-app-name" className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Appliance name
-                      </label>
-                      <input
-                        id="custom-app-name"
-                        type="text"
-                        value={customName}
-                        onChange={e => setCustomName(e.target.value)}
-                        placeholder="e.g. Chest freezer, Sewing machine"
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#156DB7]"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="custom-app-watts" className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Wattage (W)
-                      </label>
-                      <input
-                        id="custom-app-watts"
-                        type="number"
-                        min={1}
-                        value={customWattage}
-                        onChange={e => setCustomWattage(e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#156DB7]"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="custom-app-qty" className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Quantity
-                      </label>
-                      <input
-                        id="custom-app-qty"
-                        type="number"
-                        min={1}
-                        value={customQty}
-                        onChange={e => setCustomQty(e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#156DB7]"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="custom-app-hours" className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Hours / day
-                      </label>
-                      <input
-                        id="custom-app-hours"
-                        type="number"
-                        min={0.5}
-                        max={24}
-                        step={0.5}
-                        value={customAppHours}
-                        onChange={e => setCustomAppHours(e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#156DB7]"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="custom-app-surge" className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Startup / surge
-                      </label>
-                      <select
-                        id="custom-app-surge"
-                        value={customSurge}
-                        onChange={e => setCustomSurge(e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#156DB7]"
-                      >
-                        <option value="1">Low (lights, electronics) — 1×</option>
-                        <option value="1.2">Typical resistive load — 1.2×</option>
-                        <option value="1.5">Mild motor / appliance — 1.5×</option>
-                        <option value="2.5">AC / pump / motor — 2.5×</option>
-                        <option value="3">Compressor / fridge / fridge-like — 3×</option>
-                      </select>
-                    </div>
-                  </div>
-
+                {/* Custom appliance — click to expand */}
+                <div className="pt-5 border-t border-slate-100">
                   <button
-                    id="add-custom-appliance-btn"
                     type="button"
-                    onClick={handleAddCustomAppliance}
-                    className="inline-flex items-center space-x-1.5 px-4 py-2.5 bg-[#123A63] hover:bg-[#0e2f52] text-white text-xs font-bold rounded-xl transition-colors"
+                    id="toggle-custom-appliance"
+                    onClick={() => setCustomOpen(v => !v)}
+                    className="w-full flex items-center justify-between gap-3 text-left rounded-xl px-3 py-2.5 hover:bg-slate-50 border border-transparent hover:border-slate-200 transition-all"
+                    aria-expanded={customOpen}
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add custom appliance</span>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800">Add a custom appliance</h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Not in the list? Click to enter name, wattage, and daily hours.
+                      </p>
+                    </div>
+                    <ChevronDown
+                      className={`w-4 h-4 text-slate-500 shrink-0 transition-transform ${customOpen ? 'rotate-180' : ''}`}
+                    />
                   </button>
+
+                  {customOpen && (
+                    <div className="mt-3 space-y-3 px-1">
+                      {customError && (
+                        <p className="text-[11px] text-rose-600 font-medium">{customError}</p>
+                      )}
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="sm:col-span-2">
+                          <label htmlFor="custom-app-name" className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Appliance name
+                          </label>
+                          <input
+                            id="custom-app-name"
+                            type="text"
+                            value={customName}
+                            onChange={e => setCustomName(e.target.value)}
+                            placeholder="e.g. Chest freezer, Sewing machine"
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#156DB7]"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="custom-app-watts" className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Wattage (W)
+                          </label>
+                          <input
+                            id="custom-app-watts"
+                            type="number"
+                            min={1}
+                            value={customWattage}
+                            onChange={e => setCustomWattage(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#156DB7]"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="custom-app-qty" className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Quantity
+                          </label>
+                          <input
+                            id="custom-app-qty"
+                            type="number"
+                            min={1}
+                            value={customQty}
+                            onChange={e => setCustomQty(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#156DB7]"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="custom-app-hours" className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Hours / day
+                          </label>
+                          <input
+                            id="custom-app-hours"
+                            type="number"
+                            min={0.5}
+                            max={24}
+                            step={0.5}
+                            value={customAppHours}
+                            onChange={e => setCustomAppHours(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#156DB7]"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="custom-app-surge" className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Startup / surge
+                          </label>
+                          <select
+                            id="custom-app-surge"
+                            value={customSurge}
+                            onChange={e => setCustomSurge(e.target.value)}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-[#156DB7]"
+                          >
+                            <option value="1">Low (lights, electronics) — 1×</option>
+                            <option value="1.2">Typical resistive load — 1.2×</option>
+                            <option value="1.5">Mild motor / appliance — 1.5×</option>
+                            <option value="2.5">AC / pump / motor — 2.5×</option>
+                            <option value="3">Compressor / fridge / fridge-like — 3×</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <button
+                        id="add-custom-appliance-btn"
+                        type="button"
+                        onClick={handleAddCustomAppliance}
+                        className="inline-flex items-center space-x-1.5 px-4 py-2.5 bg-[#123A63] hover:bg-[#0e2f52] text-white text-xs font-bold rounded-xl transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Add custom appliance</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1009,7 +1025,11 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     <span className="text-xs font-semibold text-slate-500">~{activeCalcs.batteryCapacityAh} Ah required</span>
                   </div>
                   <p className="text-[10px] text-slate-400">
-                    Configuration layout: <span className="font-semibold text-[#156DB7]">{activeCalcs.batteryConfiguration}</span>
+                    Configuration layout:{' '}
+                    <span className="font-semibold text-[#156DB7]">
+                      {activeCalcs.batterySeriesCount ?? '-'}S × {activeCalcs.batteryParallelCount ?? '-'}P · {activeCalcs.batteryQuantity} total
+                    </span>
+                    <span className="block text-[10px] text-slate-500 mt-1">{activeCalcs.batteryConfiguration}</span>
                   </p>
                 </div>
               </div>
@@ -1034,10 +1054,10 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Inverter Topology</label>
                 <div className="space-y-3">
                   {[
-                    { id: 'hybrid', name: 'Hybrid Inverter', desc: 'Grid-interactive with battery (Deye, Growatt, Luxpower, Solis, GoodWe…).' },
-                    { id: 'off_grid', name: 'Off-Grid Inverter', desc: 'Standalone battery systems only (Felicity, MUST, SRNE, Growatt SPF…).' },
-                    { id: 'grid_tie', name: 'Grid + Battery Hybrid', desc: 'Sizes a hybrid inverter for grid sync with battery backup (not export-only string inverters).' },
-                    { id: 'auto', name: 'Auto Recommend', desc: 'Selects the safest default option.' },
+                    { id: 'hybrid', name: 'Hybrid Inverter', desc: 'Grid + battery. Built-in MPPT(s) — no separate charge controller needed.' },
+                    { id: 'off_grid', name: 'Off-Grid Inverter', desc: 'Standalone AIO with built-in MPPT (MUST / Growatt SPF / Felicity / SRNE). Not a bare inverter/charger.' },
+                    { id: 'grid_tie', name: 'Grid + Battery Hybrid', desc: 'Sizes a hybrid with built-in MPPT for grid sync + battery backup.' },
+                    { id: 'auto', name: 'Auto Recommend', desc: 'Picks the safest hybrid or off-grid AIO (with built-in MPPT).' },
                   ].map((inv) => (
                     <button
                       id={`inv-type-${inv.id}`}
