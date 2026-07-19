@@ -1,41 +1,34 @@
-import React, { useEffect, useState } from 'react';
-import { ReactLenis, useLenis } from 'lenis/react';
-import 'lenis/dist/lenis.css';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 
-function LenisHashLinks() {
-  const lenis = useLenis();
+const DesktopLenis = lazy(() => import('./DesktopLenis'));
 
-  useEffect(() => {
-    if (!lenis) return;
-
-    const onClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      const anchor = target?.closest('a[href^="#"]') as HTMLAnchorElement | null;
-      if (!anchor) return;
-      const id = anchor.getAttribute('href')?.slice(1);
-      if (!id) return;
-      const el = document.getElementById(id);
-      if (!el) return;
-      e.preventDefault();
-      lenis.scrollTo(el, { offset: -72 });
-    };
-
-    document.addEventListener('click', onClick);
-    return () => document.removeEventListener('click', onClick);
-  }, [lenis]);
-
-  return null;
+function shouldEnableSmoothScroll(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+  if (window.matchMedia('(pointer: coarse)').matches) return false;
+  if (window.matchMedia('(max-width: 900px)').matches) return false;
+  return true;
 }
 
 export const SmoothScroll: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [enabled, setEnabled] = useState(true);
+  const [enabled, setEnabled] = useState(false);
 
   useEffect(() => {
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const sync = () => setEnabled(!mq.matches);
+    const sync = () => setEnabled(shouldEnableSmoothScroll());
     sync();
-    mq.addEventListener('change', sync);
-    return () => mq.removeEventListener('change', sync);
+
+    const mqMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const mqPointer = window.matchMedia('(pointer: coarse)');
+    const mqWidth = window.matchMedia('(max-width: 900px)');
+
+    mqMotion.addEventListener('change', sync);
+    mqPointer.addEventListener('change', sync);
+    mqWidth.addEventListener('change', sync);
+    return () => {
+      mqMotion.removeEventListener('change', sync);
+      mqPointer.removeEventListener('change', sync);
+      mqWidth.removeEventListener('change', sync);
+    };
   }, []);
 
   if (!enabled) {
@@ -43,9 +36,8 @@ export const SmoothScroll: React.FC<{ children: React.ReactNode }> = ({ children
   }
 
   return (
-    <ReactLenis root options={{ lerp: 0.09, duration: 1.1, smoothWheel: true }}>
-      <LenisHashLinks />
-      {children}
-    </ReactLenis>
+    <Suspense fallback={<>{children}</>}>
+      <DesktopLenis>{children}</DesktopLenis>
+    </Suspense>
   );
 };

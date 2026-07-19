@@ -37,7 +37,16 @@ export const HeroRotation: React.FC<HeroRotationProps> = ({
   secondaryCta,
   onSlideChange
 }) => {
-  const reduce = useReducedMotion();
+  const reduceMotion = useReducedMotion();
+  const [isCoarsePointer, setIsCoarsePointer] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(pointer: coarse)');
+    const sync = () => setIsCoarsePointer(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+  const reduce = !!reduceMotion || isCoarsePointer;
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const [typed, setTyped] = useState('');

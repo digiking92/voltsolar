@@ -84,6 +84,33 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, '.')
       }
     },
+    build: {
+      target: 'es2020',
+      cssCodeSplit: true,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return;
+            if (id.includes('jspdf') || id.includes('html2canvas') || id.includes('html2pdf')) {
+              return 'vendor-pdf';
+            }
+            if (id.includes('@supabase')) return 'vendor-supabase';
+            if (id.includes('motion') || id.includes('framer-motion')) return 'vendor-motion';
+            if (id.includes('lenis')) return 'vendor-lenis';
+            if (id.includes('lucide-react')) return 'vendor-icons';
+            if (
+              id.includes('react-dom') ||
+              id.includes('react-router') ||
+              id.includes('/react/') ||
+              id.endsWith('\\react\\index.js') ||
+              id.includes('node_modules/react/')
+            ) {
+              return 'vendor-react';
+            }
+          }
+        }
+      }
+    },
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {}

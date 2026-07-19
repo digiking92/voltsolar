@@ -197,6 +197,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               key={heroImage}
               src={heroImage}
               alt=""
+              decoding="async"
+              fetchPriority="high"
               initial={{ opacity: 0, scale: 1.04 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0 }}
@@ -354,6 +356,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <img
                 src="/images/load-calc-desk.png"
                 alt="Manual electrical load calculation worksheet on a desk"
+                loading="lazy"
+                decoding="async"
                 className="img-reveal w-full h-[420px] object-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-[#123A63]/70 via-transparent to-transparent" />
@@ -440,6 +444,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         <img
           src="/images/solar-farm-night.png"
           alt=""
+          loading="lazy"
+          decoding="async"
           className="absolute inset-0 h-full w-full object-cover"
         />
         <div className="absolute inset-0 bg-gradient-to-r from-[#123A63]/92 via-[#156DB7]/85 to-[#0F5288]/88" />
@@ -529,6 +535,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <img
                 src="/images/engineer-desk.png"
                 alt="Engineer validating system designs on dual monitors"
+                loading="lazy"
+                decoding="async"
                 className="img-reveal w-full h-[420px] object-cover object-center"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-[#123A63]/75 via-transparent to-transparent" />
@@ -565,7 +573,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   key={shot.label}
                   className="group relative overflow-hidden rounded-2xl border border-slate-200 shadow-sm"
                 >
-                  <img src={shot.src} alt={shot.label} className="img-reveal h-40 sm:h-48 w-full object-cover" />
+                  <img
+                    src={shot.src}
+                    alt={shot.label}
+                    loading="lazy"
+                    decoding="async"
+                    className="img-reveal h-40 sm:h-48 w-full object-cover"
+                  />
                   <div className="absolute inset-0 bg-gradient-to-t from-[#123A63]/80 via-transparent to-transparent" />
                   <p className="absolute bottom-3 left-3 right-3 text-sm font-bold text-white">{shot.label}</p>
                 </div>
@@ -629,6 +643,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <img
                 src="/images/industrial-roof-solar.png"
                 alt="Industrial facility with rooftop solar arrays"
+                loading="lazy"
+                decoding="async"
                 className="img-reveal h-80 w-full object-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-[#123A63]/75 to-transparent" />
@@ -774,7 +790,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
       {/* Final CTA */}
       <section className="relative overflow-hidden py-24">
-        <img src="/images/solar-farm-water.png" alt="" className="absolute inset-0 h-full w-full object-cover" />
+        <img
+          src="/images/solar-farm-water.png"
+          alt=""
+          loading="lazy"
+          decoding="async"
+          className="absolute inset-0 h-full w-full object-cover"
+        />
         <div className="absolute inset-0 bg-[#123A63]/85" />
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(105,189,69,0.25),transparent_50%)]" />
         <div className="relative max-w-3xl mx-auto px-6 text-center">

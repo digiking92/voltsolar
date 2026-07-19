@@ -8,10 +8,10 @@ import {
 import { useApp } from '../../context/AppContext';
 import { DEFAULT_APPLIANCES } from '../../data/appliances';
 import { runFullDesignCalculations } from '../../lib/calculations';
-import { exportReportPdf } from '../../lib/exportReportPdf';
 import { parseInverterReasonPoints } from '../../lib/calculations/reportPresentation';
 import { Project, ProjectAppliance, BatteryType, SystemVoltage, InverterType, Calculations } from '../../types';
 import { EngineeringReport } from './EngineeringReport';
+import type { ReportPdfData } from '../../lib/exportReportPdf';
 
 interface ProjectWizardProps {
   projectToEdit?: Project | null;
@@ -357,26 +357,25 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
     setIsDownloadingPdf(true);
     try {
       const name = (projectName || 'engineering-report').trim();
-      await exportReportPdf(
-        {
-          calcs: activeCalcs,
-          projectName,
-          clientName,
-          clientPhone,
-          clientEmail,
-          location,
-          projectType,
-          backupHours,
-          batteryType,
-          systemVoltage,
-          inverterType,
-          panelSize,
-          appliancesList,
-          designId,
-          issuedAt: reportIssuedAt
-        },
-        `${name}-VoltSolar-Report`
-      );
+      const { exportReportPdf } = await import('../../lib/exportReportPdf');
+      const payload: ReportPdfData = {
+        calcs: activeCalcs,
+        projectName,
+        clientName,
+        clientPhone,
+        clientEmail,
+        location,
+        projectType,
+        backupHours,
+        batteryType,
+        systemVoltage,
+        inverterType,
+        panelSize,
+        appliancesList,
+        designId,
+        issuedAt: reportIssuedAt
+      };
+      await exportReportPdf(payload, `${name}-VoltSolar-Report`);
     } catch (err) {
       console.error('PDF export failed:', err);
       const message =

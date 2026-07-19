@@ -1,22 +1,49 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { AppProvider, useApp } from './context/AppContext';
-import { LandingPage } from './features/landing/LandingPage';
-import { AboutPage } from './features/about/AboutPage';
-import { ContactPage } from './features/contact/ContactPage';
-import { PrivacyPage } from './features/legal/PrivacyPage';
-import { TermsPage } from './features/legal/TermsPage';
-import { AuthPage } from './features/auth/AuthPage';
-import { ResetPasswordPage } from './features/auth/ResetPasswordPage';
-import { Layout } from './components/Layout';
-import { DashboardPage } from './features/dashboard/DashboardPage';
-import { ProjectsListPage } from './features/projects/ProjectsListPage';
-import { ProjectWizard } from './features/wizard/ProjectWizard';
-import { ProfilePage } from './features/profile/ProfilePage';
-import { SettingsPage } from './features/settings/SettingsPage';
 import { PublicPage } from './components/PublicChrome';
 import { Project } from './types';
 import { useIdleTimeout } from './hooks/useIdleTimeout';
+
+const LandingPage = lazy(() =>
+  import('./features/landing/LandingPage').then(m => ({ default: m.LandingPage }))
+);
+const AboutPage = lazy(() =>
+  import('./features/about/AboutPage').then(m => ({ default: m.AboutPage }))
+);
+const ContactPage = lazy(() =>
+  import('./features/contact/ContactPage').then(m => ({ default: m.ContactPage }))
+);
+const PrivacyPage = lazy(() =>
+  import('./features/legal/PrivacyPage').then(m => ({ default: m.PrivacyPage }))
+);
+const TermsPage = lazy(() =>
+  import('./features/legal/TermsPage').then(m => ({ default: m.TermsPage }))
+);
+const AuthPage = lazy(() =>
+  import('./features/auth/AuthPage').then(m => ({ default: m.AuthPage }))
+);
+const ResetPasswordPage = lazy(() =>
+  import('./features/auth/ResetPasswordPage').then(m => ({ default: m.ResetPasswordPage }))
+);
+const Layout = lazy(() =>
+  import('./components/Layout').then(m => ({ default: m.Layout }))
+);
+const DashboardPage = lazy(() =>
+  import('./features/dashboard/DashboardPage').then(m => ({ default: m.DashboardPage }))
+);
+const ProjectsListPage = lazy(() =>
+  import('./features/projects/ProjectsListPage').then(m => ({ default: m.ProjectsListPage }))
+);
+const ProjectWizard = lazy(() =>
+  import('./features/wizard/ProjectWizard').then(m => ({ default: m.ProjectWizard }))
+);
+const ProfilePage = lazy(() =>
+  import('./features/profile/ProfilePage').then(m => ({ default: m.ProfilePage }))
+);
+const SettingsPage = lazy(() =>
+  import('./features/settings/SettingsPage').then(m => ({ default: m.SettingsPage }))
+);
 
 const IDLE_LOGOUT_MS = 30 * 60 * 1000;
 
@@ -27,6 +54,17 @@ const PAGE_PATH: Record<PublicPage, string> = {
   privacy: '/privacy',
   terms: '/terms'
 };
+
+function RouteFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-[#123A63] to-[#156DB7] animate-pulse" />
+        <p className="text-sm text-slate-500">Loading VoltSolar…</p>
+      </div>
+    </div>
+  );
+}
 
 function ScrollToTop() {
   const { pathname, hash } = useLocation();
@@ -59,11 +97,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   if (!authReady) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-600 text-sm">
-        Loading…
-      </div>
-    );
+    return <RouteFallback />;
   }
 
   if (!isAuthenticated) {
@@ -145,18 +179,13 @@ function AuthRoute({ mode }: { mode: 'login' | 'signup' | 'forgot' }) {
   const from = (location.state as { from?: string } | null)?.from || '/app';
 
   useEffect(() => {
-    // Don't bounce away during forgot-password — user may already have a stale session
     if (authReady && isAuthenticated && mode !== 'forgot') {
       navigate(from.startsWith('/app') ? from : '/app', { replace: true });
     }
   }, [authReady, isAuthenticated, navigate, from, mode]);
 
   if (!authReady) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-600 text-sm">
-        Loading…
-      </div>
-    );
+    return <RouteFallback />;
   }
 
   if (isAuthenticated && mode !== 'forgot') {
@@ -275,40 +304,42 @@ function MainApp() {
     <>
       <ScrollToTop />
       <HashScroller />
-      <Routes>
-        <Route
-          path="/"
-          element={
-            <PublicMarketing>{props => <LandingPage {...props} />}</PublicMarketing>
-          }
-        />
-        <Route
-          path="/about"
-          element={<PublicMarketing>{props => <AboutPage {...props} />}</PublicMarketing>}
-        />
-        <Route path="/contact" element={<ContactRoute />} />
-        <Route
-          path="/privacy"
-          element={<PublicMarketing>{props => <PrivacyPage {...props} />}</PublicMarketing>}
-        />
-        <Route
-          path="/terms"
-          element={<PublicMarketing>{props => <TermsPage {...props} />}</PublicMarketing>}
-        />
-        <Route path="/login" element={<AuthRoute mode="login" />} />
-        <Route path="/signup" element={<AuthRoute mode="signup" />} />
-        <Route path="/forgot-password" element={<AuthRoute mode="forgot" />} />
-        <Route path="/reset-password" element={<ResetPasswordRoute />} />
-        <Route
-          path="/app/*"
-          element={
-            <RequireAuth>
-              <AppShell />
-            </RequireAuth>
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <Suspense fallback={<RouteFallback />}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <PublicMarketing>{props => <LandingPage {...props} />}</PublicMarketing>
+            }
+          />
+          <Route
+            path="/about"
+            element={<PublicMarketing>{props => <AboutPage {...props} />}</PublicMarketing>}
+          />
+          <Route path="/contact" element={<ContactRoute />} />
+          <Route
+            path="/privacy"
+            element={<PublicMarketing>{props => <PrivacyPage {...props} />}</PublicMarketing>}
+          />
+          <Route
+            path="/terms"
+            element={<PublicMarketing>{props => <TermsPage {...props} />}</PublicMarketing>}
+          />
+          <Route path="/login" element={<AuthRoute mode="login" />} />
+          <Route path="/signup" element={<AuthRoute mode="signup" />} />
+          <Route path="/forgot-password" element={<AuthRoute mode="forgot" />} />
+          <Route path="/reset-password" element={<ResetPasswordRoute />} />
+          <Route
+            path="/app/*"
+            element={
+              <RequireAuth>
+                <AppShell />
+              </RequireAuth>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
     </>
   );
 }

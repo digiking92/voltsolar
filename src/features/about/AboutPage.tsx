@@ -97,7 +97,7 @@ export const AboutPage: React.FC<AboutPageProps> = ({
     >
       {/* Hero */}
       <section className="relative min-h-[58vh] overflow-hidden border-b border-slate-200">
-        <img src="/images/solar-farm-aerial.png" alt="" className="absolute inset-0 h-full w-full object-cover" />
+        <img src="/images/solar-farm-aerial.png" alt="" loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-cover" />
         <div className="absolute inset-0 bg-gradient-to-b from-[#123A63]/88 via-[#156DB7]/78 to-[#0F5288]/92" />
         <div className="pointer-events-none absolute -top-16 left-8 h-64 w-64 rounded-full bg-[#69BD45]/25 blur-3xl animate-aurora-a" />
         <div className="pointer-events-none absolute bottom-0 right-0 h-72 w-72 rounded-full bg-[#69BD45]/20 blur-3xl animate-aurora-b" />
@@ -255,7 +255,7 @@ export const AboutPage: React.FC<AboutPageProps> = ({
 
       {/* CTA */}
       <section className="relative overflow-hidden py-20">
-        <img src="/images/industrial-roof-solar.png" alt="" className="absolute inset-0 h-full w-full object-cover" />
+        <img src="/images/industrial-roof-solar.png" alt="" loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-cover" />
         <div className="absolute inset-0 bg-[#123A63]/85" />
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_40%,rgba(105,189,69,0.25),transparent_50%)]" />
         <div className="relative max-w-3xl mx-auto px-6 text-center">
