@@ -7,8 +7,18 @@
     "api/contact.js": {
       "memory": 256,
       "maxDuration": 10
+    },
+    "api/keep-alive.js": {
+      "memory": 128,
+      "maxDuration": 10
     }
   },
+  "crons": [
+    {
+      "path": "/api/keep-alive",
+      "schedule": "0 12 * * *"
+    }
+  ],
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
