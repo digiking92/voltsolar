@@ -1,5 +1,5 @@
 # Pings Supabase daily so free-tier projects are not paused for inactivity.
-# Backup to the Vercel Cron at /api/keep-alive (runs at a different hour).
+# Hits Supabase REST directly (does not go through Cloudflare / the site domain).
 name: Supabase keep-alive
 
 on:
@@ -12,31 +12,34 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping via Vercel keep-alive endpoint
+      - name: Ping Supabase REST API
         env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          KEEP_ALIVE_URL: ${{ secrets.KEEP_ALIVE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           set -euo pipefail
-          URL="${KEEP_ALIVE_URL:-https://voltsolar.learnwithchris.app/api/keep-alive}"
 
-          if [ -z "${CRON_SECRET:-}" ]; then
-            echo "Missing CRON_SECRET GitHub secret."
-            echo "Add it in GitHub → Settings → Secrets and variables → Actions"
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_ANON_KEY:-}" ]; then
+            echo "Missing SUPABASE_URL or SUPABASE_ANON_KEY GitHub secrets."
+            echo "Add them from your Supabase project settings (URL + anon/publishable key)."
             exit 1
           fi
 
-          STATUS=$(curl -sS -o /tmp/keep-alive.json -w "%{http_code}" \
-            -H "Authorization: Bearer ${CRON_SECRET}" \
+          URL="${SUPABASE_URL%/}/rest/v1/profiles?select=id&limit=1"
+          STATUS=$(curl -sS -o /tmp/supabase-keep-alive.json -w "%{http_code}" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
             -H "Accept: application/json" \
+            -H "Cache-Control: no-cache" \
             "$URL")
 
-          echo "Keep-alive HTTP status: ${STATUS}"
-          cat /tmp/keep-alive.json || true
+          echo "Supabase HTTP status: ${STATUS}"
+          head -c 500 /tmp/supabase-keep-alive.json || true
           echo
 
-          if [ "$STATUS" != "200" ]; then
-            echo "Keep-alive failed. If Supabase is paused, restore it in the dashboard first."
+          # 2xx/4xx = request reached Supabase (counts as activity).
+          if [ "$STATUS" -ge 500 ] || [ "$STATUS" -eq 000 ]; then
+            echo "Keep-alive failed. If the project is paused, restore it in the Supabase dashboard."
             exit 1
           fi
 
