@@ -1,6 +1,9 @@
 /**
  * Lightweight Supabase ping so free-tier projects don't pause after inactivity.
  * Invoked daily by Vercel Cron (see vercel.json).
+ *
+ * Note: Any successful HTTP round-trip to PostgREST counts as project activity,
+ * including RLS-denied responses (still hit the database).
  */
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -40,24 +43,34 @@ export default async function handler(req, res) {
         headers: {
           apikey: supabaseKey,
           Authorization: `Bearer ${supabaseKey}`,
-          Accept: 'application/json'
+          Accept: 'application/json',
+          'Cache-Control': 'no-cache'
         }
       }
     );
 
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '');
+    const detail = await response.text().catch(() => '');
+
+    // 2xx / 4xx both mean Supabase received the request (activity registered).
+    // Only treat network-level / 5xx / paused-project failures as hard errors.
+    const reachedSupabase = response.status > 0 && response.status < 500;
+    if (!reachedSupabase) {
       console.error('keep-alive: Supabase ping failed', response.status, detail);
       return res.status(502).json({
         ok: false,
-        error: 'Supabase ping failed',
+        error: 'Supabase ping failed (project may be paused)',
         status: response.status
       });
+    }
+
+    if (!response.ok) {
+      console.warn('keep-alive: Supabase responded non-OK but was reached', response.status, detail);
     }
 
     return res.status(200).json({
       ok: true,
       message: 'Supabase keep-alive ping succeeded',
+      supabaseStatus: response.status,
       at: new Date().toISOString()
     });
   } catch (err) {
