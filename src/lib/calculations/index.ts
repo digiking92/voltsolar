@@ -93,7 +93,7 @@ export function runFullDesignCalculations(
         backupHours,
         batteryType,
         vSys,
-        inv.sizeKva * 1000,
+        loadRes.connectedLoad,
         inv.efficiency,
         inv.maxBatteryDischargeCurrentA,
         inv.maxBatteryChargeCurrentA
@@ -233,6 +233,12 @@ export function runFullDesignCalculations(
     pvCableAreaMm2: cableRes.calculationsRaw.pvCableAreaMm2,
     batteryCableAreaMm2: cableRes.calculationsRaw.batteryCableAreaMm2,
     acCableAreaMm2: cableRes.calculationsRaw.acCableAreaMm2,
+    pvCableDesignCurrentA: cableRes.pvDesignCurrentA,
+    pvCableAmpacityA: cableRes.pvCableAmpacityA,
+    batteryCableDesignCurrentA: cableRes.batteryDesignCurrentA,
+    batteryCableAmpacityA: cableRes.batteryCableAmpacityA,
+    acCableDesignCurrentA: cableRes.acDesignCurrentA,
+    acCableAmpacityA: cableRes.acCableAmpacityA,
     acBreakerCurrentA: protectionRes.calculationsRaw.selectedAcBreakerRating,
     panelQuantityReported: layout.totalPanels,
     batteryQuantityReported: batt.batteryQuantity

@@ -38,6 +38,13 @@ export interface ConsistencyAuditInput {
   pvCableAreaMm2: number;
   batteryCableAreaMm2: number;
   acCableAreaMm2: number;
+  /** Prefer schedule values from cable sizing (handles parallel conductors). */
+  pvCableDesignCurrentA?: number;
+  pvCableAmpacityA?: number;
+  batteryCableDesignCurrentA?: number;
+  batteryCableAmpacityA?: number;
+  acCableDesignCurrentA?: number;
+  acCableAmpacityA?: number;
   acBreakerCurrentA: number;
   panelQuantityReported: number;
   batteryQuantityReported: number;
@@ -50,9 +57,18 @@ export interface ConsistencyAuditResult {
 }
 
 function cableAmpacity(areaMm2: number): number {
-  const found = COPPER_CABLE_SPECS.find(c => c.crossSectionMm2 === areaMm2)
-    || COPPER_CABLE_SPECS.find(c => c.crossSectionMm2 >= areaMm2);
-  return found ? found.maxCurrentA : 0;
+  if (!Number.isFinite(areaMm2) || areaMm2 <= 0) return 0;
+
+  const exact = COPPER_CABLE_SPECS.find(c => c.crossSectionMm2 === areaMm2);
+  if (exact) return exact.maxCurrentA;
+
+  const covering = COPPER_CABLE_SPECS.find(c => c.crossSectionMm2 >= areaMm2);
+  if (covering) return covering.maxCurrentA;
+
+  // Parallel runs of largest catalog conductor (effective area = N × size)
+  const largest = COPPER_CABLE_SPECS[COPPER_CABLE_SPECS.length - 1];
+  const runs = Math.max(1, Math.ceil(areaMm2 / largest.crossSectionMm2 - 1e-9));
+  return largest.maxCurrentA * runs;
 }
 
 /**
@@ -113,17 +129,20 @@ export function runConsistencyAudit(input: ConsistencyAuditInput): ConsistencyAu
 
   // PV string cable is sized on ONE string Isc, not paralleled array current
   const moduleIsc = input.stringIscMax / Math.max(1, input.parallelCount);
-  const pvDesignCurrent = moduleIsc * SYSTEM_STANDARDS.necBreakerMultiplier;
-  const pvAmpacity = cableAmpacity(input.pvCableAreaMm2);
-  if (pvDesignCurrent > pvAmpacity) {
+  const pvDesignCurrent =
+    input.pvCableDesignCurrentA ?? moduleIsc * SYSTEM_STANDARDS.necBreakerMultiplier;
+  const pvAmpacity = input.pvCableAmpacityA ?? cableAmpacity(input.pvCableAreaMm2);
+  if (pvDesignCurrent > pvAmpacity + 0.5) {
     errors.push(
       `PV string design current ${pvDesignCurrent.toFixed(1)}A exceeds PV cable ampacity ${pvAmpacity}A.`
     );
   }
 
-  const battDesignCurrent = input.batteryInverterDrawA * SYSTEM_STANDARDS.necBreakerMultiplier;
-  const battAmpacity = cableAmpacity(input.batteryCableAreaMm2);
-  if (battDesignCurrent > battAmpacity) {
+  const battDesignCurrent =
+    input.batteryCableDesignCurrentA ??
+    input.batteryInverterDrawA * SYSTEM_STANDARDS.necBreakerMultiplier;
+  const battAmpacity = input.batteryCableAmpacityA ?? cableAmpacity(input.batteryCableAreaMm2);
+  if (battDesignCurrent > battAmpacity + 0.5) {
     errors.push(
       `Battery design current ${battDesignCurrent.toFixed(1)}A exceeds battery cable ampacity ${battAmpacity}A.`
     );
@@ -134,9 +153,10 @@ export function runConsistencyAudit(input: ConsistencyAuditInput): ConsistencyAu
     phases === 3
       ? (input.inverter.sizeKva * 1000) / (Math.sqrt(3) * 400)
       : (input.inverter.sizeKva * 1000) / SYSTEM_STANDARDS.acNominalVoltageV;
-  const acDesign = acCurrent * SYSTEM_STANDARDS.necBreakerMultiplier;
-  const acAmpacity = cableAmpacity(input.acCableAreaMm2);
-  if (acDesign > acAmpacity) {
+  const acDesign =
+    input.acCableDesignCurrentA ?? acCurrent * SYSTEM_STANDARDS.necBreakerMultiplier;
+  const acAmpacity = input.acCableAmpacityA ?? cableAmpacity(input.acCableAreaMm2);
+  if (acDesign > acAmpacity + 0.5) {
     errors.push(
       `AC design current ${acDesign.toFixed(1)}A exceeds AC cable ampacity ${acAmpacity}A.`
     );

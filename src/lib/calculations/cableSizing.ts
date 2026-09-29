@@ -51,14 +51,37 @@ function resolveDistance(input: number | undefined, fallback: number): { meters:
   return { meters: fallback, assumed: true };
 }
 
-function selectCable(minAreaMm2: number): (typeof COPPER_CABLE_SPECS)[number] {
+function selectCable(
+  minAreaMm2: number,
+  designCurrentA?: number
+): { spec: (typeof COPPER_CABLE_SPECS)[number]; parallelRuns: number } {
   const found = COPPER_CABLE_SPECS.find(c => c.crossSectionMm2 >= minAreaMm2);
-  if (!found) {
-    throw new Error(
-      `Cable sizing failed: required >=${minAreaMm2.toFixed(1)} mm2 exceeds catalog max ${COPPER_CABLE_SPECS[COPPER_CABLE_SPECS.length - 1].crossSectionMm2} mm2. Split parallel runs or reduce current.`
-    );
+  if (found && (designCurrentA == null || found.maxCurrentA >= designCurrentA)) {
+    return { spec: found, parallelRuns: 1 };
   }
-  return found;
+
+  // Commercial / high-current runs: use N× largest catalog conductor in parallel
+  const largest = COPPER_CABLE_SPECS[COPPER_CABLE_SPECS.length - 1];
+  for (let runs = 2; runs <= 8; runs++) {
+    const effectiveArea = largest.crossSectionMm2 * runs;
+    const effectiveAmpacity = largest.maxCurrentA * runs;
+    const areaOk = effectiveArea + 1e-9 >= minAreaMm2;
+    const currentOk = designCurrentA == null || effectiveAmpacity + 1e-9 >= designCurrentA;
+    if (areaOk && currentOk) {
+      return { spec: largest, parallelRuns: runs };
+    }
+  }
+
+  throw new Error(
+    `Cable sizing failed: required >=${minAreaMm2.toFixed(1)} mm2 / ${
+      designCurrentA != null ? `${designCurrentA.toFixed(0)}A` : 'n/a'
+    } exceeds ${8}×${largest.crossSectionMm2} mm2 parallel catalog limit. Reduce current or shorten the run.`
+  );
+}
+
+function cableLabel(areaMm2: number, parallelRuns: number, base: string): string {
+  if (parallelRuns <= 1) return `${areaMm2.toFixed(1)} mm2 ${base}`;
+  return `${parallelRuns}×${areaMm2.toFixed(1)} mm2 parallel ${base}`;
 }
 
 /**
@@ -95,10 +118,11 @@ export function sizeSystemCables(
       : 4.0;
 
   const pvRequiredArea = Math.max(4.0, pvMinAreaByCurrent, pvMinAreaByDrop);
-  const pvSelectedCable = selectCable(pvRequiredArea);
+  const pvSelected = selectCable(pvRequiredArea, pvDesignCurrent);
+  const pvEffectiveArea = pvSelected.spec.crossSectionMm2 * pvSelected.parallelRuns;
 
   const pvActualDropV =
-    (2 * pvContinuousCurrent * pvDistanceM * 0.0172) / pvSelectedCable.crossSectionMm2;
+    (2 * pvContinuousCurrent * pvDistanceM * 0.0172) / pvEffectiveArea;
   const pvActualDropPercent = stringVmpMax > 0 ? (pvActualDropV / stringVmpMax) * 100 : 0;
 
   const batteryContinuousCurrent = maxInverterDcCurrent;
@@ -118,11 +142,12 @@ export function sizeSystemCables(
     batteryMinAreaByCurrent,
     batteryMinAreaByDrop
   );
-  const batterySelectedCable = selectCable(batteryRequiredArea);
+  const batterySelected = selectCable(batteryRequiredArea, batteryDesignCurrent);
+  const batteryEffectiveArea =
+    batterySelected.spec.crossSectionMm2 * batterySelected.parallelRuns;
 
   const batteryActualDropV =
-    (2 * batteryContinuousCurrent * batteryDistanceM * 0.0172) /
-    batterySelectedCable.crossSectionMm2;
+    (2 * batteryContinuousCurrent * batteryDistanceM * 0.0172) / batteryEffectiveArea;
   const batteryActualDropPercent = (batteryActualDropV / batteryVoltageNum) * 100;
 
   const acContinuousCurrent = maxAcOutputCurrent;
@@ -137,41 +162,57 @@ export function sizeSystemCables(
       : (2 * acContinuousCurrent * acDistanceM * 0.0172) / acAllowedDropV;
 
   const acRequiredArea = Math.max(2.5, acMinAreaByCurrent, acMinAreaByDrop);
-  const acSelectedCable = selectCable(acRequiredArea);
+  const acSelected = selectCable(acRequiredArea, acDesignCurrent);
+  const acEffectiveArea = acSelected.spec.crossSectionMm2 * acSelected.parallelRuns;
 
   const acActualDropV =
     acPhases === 3
-      ? (Math.sqrt(3) * acContinuousCurrent * acDistanceM * 0.0172) /
-        acSelectedCable.crossSectionMm2
-      : (2 * acContinuousCurrent * acDistanceM * 0.0172) / acSelectedCable.crossSectionMm2;
+      ? (Math.sqrt(3) * acContinuousCurrent * acDistanceM * 0.0172) / acEffectiveArea
+      : (2 * acContinuousCurrent * acDistanceM * 0.0172) / acEffectiveArea;
   const acActualDropPercent = (acActualDropV / acNominalV) * 100;
 
   let earthCableSizeMm2 = 6;
-  if (batterySelectedCable.crossSectionMm2 >= 35) {
+  if (batteryEffectiveArea >= 35) {
     earthCableSizeMm2 = 16;
-  } else if (batterySelectedCable.crossSectionMm2 >= 16) {
+  } else if (batteryEffectiveArea >= 16) {
     earthCableSizeMm2 = 10;
   }
 
   const acCableDesc =
     acPhases === 3
-      ? `${acSelectedCable.crossSectionMm2.toFixed(1)} mm2 4-core Copper AC cable (3ph + N/E as required)`
-      : `${acSelectedCable.crossSectionMm2.toFixed(1)} mm2 Multi-Strand Copper Twin & Earth Cable`;
+      ? cableLabel(
+          acSelected.spec.crossSectionMm2,
+          acSelected.parallelRuns,
+          '4-core Copper AC cable (3ph + N/E as required)'
+        )
+      : cableLabel(
+          acSelected.spec.crossSectionMm2,
+          acSelected.parallelRuns,
+          'Multi-Strand Copper Twin & Earth Cable'
+        );
 
   return {
-    pvCableSize: `${pvSelectedCable.crossSectionMm2.toFixed(1)} mm2 Single-Core PV1-F Copper Solar Cable (per string)`,
+    pvCableSize: cableLabel(
+      pvSelected.spec.crossSectionMm2,
+      pvSelected.parallelRuns,
+      'Single-Core PV1-F Copper Solar Cable (per string)'
+    ),
     pvCableVoltageDropPercent: parseFloat(pvActualDropPercent.toFixed(2)),
-    pvCableAmpacityA: pvSelectedCable.maxCurrentA,
+    pvCableAmpacityA: pvSelected.spec.maxCurrentA * pvSelected.parallelRuns,
     pvDesignCurrentA: parseFloat(pvDesignCurrent.toFixed(1)),
     pvCableLengthM: pvDistanceM,
-    batteryCableSize: `${batterySelectedCable.crossSectionMm2.toFixed(1)} mm2 Flex-Core Double-Insulated Copper Welding Cable`,
+    batteryCableSize: cableLabel(
+      batterySelected.spec.crossSectionMm2,
+      batterySelected.parallelRuns,
+      'Flex-Core Double-Insulated Copper Welding Cable'
+    ),
     batteryCableVoltageDropPercent: parseFloat(batteryActualDropPercent.toFixed(2)),
-    batteryCableAmpacityA: batterySelectedCable.maxCurrentA,
+    batteryCableAmpacityA: batterySelected.spec.maxCurrentA * batterySelected.parallelRuns,
     batteryDesignCurrentA: parseFloat(batteryDesignCurrent.toFixed(1)),
     batteryCableLengthM: batteryDistanceM,
     acCableSize: acCableDesc,
     acCableVoltageDropPercent: parseFloat(acActualDropPercent.toFixed(2)),
-    acCableAmpacityA: acSelectedCable.maxCurrentA,
+    acCableAmpacityA: acSelected.spec.maxCurrentA * acSelected.parallelRuns,
     acDesignCurrentA: parseFloat(acDesignCurrent.toFixed(1)),
     acCableLengthM: acDistanceM,
     earthCableSize: `${earthCableSizeMm2.toFixed(1)} mm2 Yellow/Green Copper Grounding Conductor`,
@@ -180,9 +221,9 @@ export function sizeSystemCables(
     batteryLengthAssumed: battDist.assumed,
     acLengthAssumed: acDist.assumed,
     calculationsRaw: {
-      pvCableAreaMm2: pvSelectedCable.crossSectionMm2,
-      batteryCableAreaMm2: batterySelectedCable.crossSectionMm2,
-      acCableAreaMm2: acSelectedCable.crossSectionMm2
+      pvCableAreaMm2: pvEffectiveArea,
+      batteryCableAreaMm2: batteryEffectiveArea,
+      acCableAreaMm2: acEffectiveArea
     }
   };
 }

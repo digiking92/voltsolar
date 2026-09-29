@@ -82,13 +82,17 @@ export function verifyBatteryKwhConsistency(
 /**
  * Search commercial battery SKUs and round UP to market capacities.
  * Never recommends fractional/non-commercial Ah values.
+ *
+ * Discharge current is sized from the *project connected load* (with safety margin),
+ * not the inverter nameplate. Using nameplate falsely rejects valid large hybrids
+ * (e.g. 12 kVA @ 48 V draw > inverter battery current limit even when the site load fits).
  */
 export function searchBatteryConfigurations(
   dailyEnergyWh: number,
   backupHours: number,
   batteryType: BatteryType,
   systemVoltage: number,
-  inverterPowerW: number,
+  connectedLoadW: number,
   inverterEfficiency: number,
   inverterMaxDischargeA: number,
   inverterMaxChargeA: number
@@ -97,6 +101,7 @@ export function searchBatteryConfigurations(
   if (units.length === 0) return [];
 
   const results: BatteryCalculationResult[] = [];
+  const designLoadW = Math.max(connectedLoadW, 0) * SYSTEM_STANDARDS.inverterSafetyFactor;
 
   for (const unit of units) {
     const seriesCount = Math.ceil(systemVoltage / unit.voltage);
@@ -112,7 +117,8 @@ export function searchBatteryConfigurations(
       unit.dod
     );
 
-    const batteryInverterDrawA = inverterPowerW / (systemVoltage * inverterEfficiency);
+    const batteryInverterDrawA =
+      designLoadW / Math.max(systemVoltage * inverterEfficiency, 1);
     const minParallelForCapacity = Math.ceil(energy.targetAh / unit.capacityAh);
     const minParallelForDischarge = Math.ceil(
       batteryInverterDrawA / (unit.capacityAh * unit.maxContinuousDischargeC)
@@ -130,7 +136,7 @@ export function searchBatteryConfigurations(
     const maxDischargeA = installedAh * unit.maxContinuousDischargeC;
     const maxChargeA = installedAh * unit.maxContinuousChargeC;
 
-    // Bank must supply inverter draw; inverter must accept that draw
+    // Bank must supply design draw; inverter must accept that draw
     if (batteryInverterDrawA > inverterMaxDischargeA) continue;
     if (batteryInverterDrawA > maxDischargeA) continue;
 

@@ -80,13 +80,25 @@ const TOPOLOGY_LABELS: Record<InverterType, string> = {
 
 function cableAmpacityFromSizeString(sizeStr?: string): number {
   if (!sizeStr) return 0;
+  const parallelMatch = sizeStr.match(/(\d+)\s*[×x]\s*([\d.]+)\s*mm/i);
+  if (parallelMatch) {
+    const runs = parseInt(parallelMatch[1], 10);
+    const area = parseFloat(parallelMatch[2]);
+    const unit =
+      COPPER_CABLE_SPECS.find(c => c.crossSectionMm2 === area) ||
+      COPPER_CABLE_SPECS.find(c => c.crossSectionMm2 >= area);
+    if (unit && runs > 0) return unit.maxCurrentA * runs;
+  }
   const match = sizeStr.match(/([\d.]+)\s*mm/);
   if (!match) return 0;
   const area = parseFloat(match[1]);
   const found =
     COPPER_CABLE_SPECS.find(c => c.crossSectionMm2 === area) ||
     COPPER_CABLE_SPECS.find(c => c.crossSectionMm2 >= area);
-  return found?.maxCurrentA ?? 0;
+  if (found) return found.maxCurrentA;
+  const largest = COPPER_CABLE_SPECS[COPPER_CABLE_SPECS.length - 1];
+  const runs = Math.max(1, Math.ceil(area / largest.crossSectionMm2 - 1e-9));
+  return largest.maxCurrentA * runs;
 }
 
 export function buildEngineeringReportMeta(

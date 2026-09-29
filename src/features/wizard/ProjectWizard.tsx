@@ -8,6 +8,11 @@ import {
 import { useApp } from '../../context/AppContext';
 import { DEFAULT_APPLIANCES } from '../../data/appliances';
 import { runFullDesignCalculations } from '../../lib/calculations';
+import {
+  applianceDailyEnergyWh,
+  calculateLoadSchedule,
+  sumApplianceDailyEnergyWh
+} from '../../lib/calculations/loadCalculator';
 import { parseInverterReasonPoints } from '../../lib/calculations/reportPresentation';
 import { Project, ProjectAppliance, BatteryType, SystemVoltage, InverterType, Calculations } from '../../types';
 import { EngineeringReport } from './EngineeringReport';
@@ -84,7 +89,14 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       setLocation(projectToEdit.location);
       setProjectType(projectToEdit.projectType);
       
-      setAppliancesList(projectToEdit.appliances);
+      setAppliancesList(
+        (projectToEdit.appliances || []).map(app => ({
+          ...app,
+          customWattage: Math.max(0, Number(app.customWattage) || 0),
+          quantity: Math.max(0, Number(app.quantity) || 0),
+          hoursUsed: Math.max(0, Number(app.hoursUsed) || 0)
+        }))
+      );
       
       const hours = projectToEdit.backupHours;
       if ([4, 6, 8, 12, 18, 24].includes(hours)) {
@@ -239,15 +251,47 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
     return Number.isFinite(n) && n > 0 ? n : undefined;
   };
 
+  // Direct list sum — same formula as each scheduler card. Never uses design/battery solvers.
+  const totalDailyEnergyWh = sumApplianceDailyEnergyWh(appliancesList);
+  const totalDailyEnergyKwh = totalDailyEnergyWh / 1000;
+  const totalConnectedLoadW = appliancesList.reduce(
+    (sum, app) => sum + Math.max(0, Number(app.customWattage) || 0) * Math.max(0, Number(app.quantity) || 0),
+    0
+  );
+  const totalMonthlyEnergyKwh = (totalDailyEnergyWh * 30) / 1000;
+
   const runActiveCalculations = (): Calculations & { isError?: boolean; errorMessage?: string; errorType?: string } => {
     // Expected during early wizard steps — do not run the engine or spam the console
     if (appliancesList.length === 0) {
       return emptyCalculations();
     }
 
+    // Always overlay appliance-derived load totals so design failures can never zero the UI.
+    const loadSnapshot: Partial<Calculations> = {
+      connectedLoad: totalConnectedLoadW,
+      dailyEnergy: totalDailyEnergyWh,
+      monthlyEnergy: totalMonthlyEnergyKwh
+    };
+    try {
+      const loadRes = calculateLoadSchedule(appliancesList);
+      Object.assign(loadSnapshot, {
+        connectedLoad: loadRes.connectedLoad,
+        peakLoad: loadRes.peakLoad,
+        dailyEnergy: loadRes.dailyEnergy,
+        monthlyEnergy: loadRes.monthlyEnergy,
+        continuousLoadW: loadRes.continuousLoadW,
+        motorStartupLoadW: loadRes.motorStartupLoadW,
+        designLoadW: loadRes.designLoadW,
+        diversityFactor: loadRes.diversityFactor,
+        loadBreakdown: loadRes.loadBreakdown
+      });
+    } catch (loadErr) {
+      console.warn('Load schedule fallback to direct appliance sum:', loadErr);
+    }
+
     try {
       const actualBackupHours = isCustomHours ? (parseInt(customHours, 10) || 8) : backupHours;
-      return runFullDesignCalculations(
+      const design = runFullDesignCalculations(
         appliancesList,
         actualBackupHours,
         batteryType,
@@ -262,10 +306,12 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
           acDistanceM: parseOptionalDistance(acCableDistanceM)
         }
       );
+      return { ...design, ...loadSnapshot };
     } catch (err: any) {
       console.error(err);
       return {
         ...emptyCalculations(),
+        ...loadSnapshot,
         isError: true,
         errorMessage: err.message || 'An unexpected engineering calculation error occurred.',
         errorType: err.name || 'Engineering Sizing Inconsistency',
@@ -869,7 +915,10 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                           </div>
 
                           <div className="text-[10px] text-right font-semibold text-slate-500 pt-1 border-t border-slate-100/60">
-                            Daily Sizing Load: <span className="font-bold text-[#156DB7]">{((app.customWattage * app.quantity * app.hoursUsed) / 1000).toFixed(2)} kWh</span>
+                            Daily Sizing Load:{' '}
+                            <span className="font-bold text-[#156DB7]">
+                              {(applianceDailyEnergyWh(app) / 1000).toFixed(2)} kWh
+                            </span>
                           </div>
                         </div>
                       ))}
@@ -877,11 +926,20 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                   )}
                 </div>
 
-                <div className="pt-4 border-t border-slate-100">
+                <div className="pt-4 border-t border-slate-100 space-y-3">
                   <div className="flex justify-between items-center text-xs font-bold text-slate-800">
                     <span>Total Estimated Daily Energy:</span>
-                    <span className="text-base text-[#156DB7]">{(activeCalcs.dailyEnergy / 1000).toFixed(2)} kWh</span>
+                    <span className="text-base text-[#156DB7]">
+                      {totalDailyEnergyKwh.toFixed(2)} kWh
+                    </span>
                   </div>
+                  {activeCalcs.isError ? (
+                    <p className="text-[11px] leading-relaxed text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      Load total above is correct. Equipment matching could not finish yet for this
+                      load size — keep System Voltage / Inverter on Auto, or lower peak motor hours
+                      before the final report steps.
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -902,25 +960,25 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               <div className="p-5 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Connected Load</span>
-                <h3 className="text-2xl font-bold text-slate-900">{(activeCalcs.connectedLoad / 1000).toFixed(2)} kW</h3>
+                <h3 className="text-2xl font-bold text-slate-900">{(totalConnectedLoadW / 1000).toFixed(2)} kW</h3>
                 <p className="text-[10px] text-slate-500">Cumulative sum of active wattage loads.</p>
               </div>
 
               <div className="p-5 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
                 <span className="text-[10px] font-bold text-[#156DB7] uppercase tracking-widest">Peak Startup Surge</span>
-                <h3 className="text-2xl font-bold text-slate-900">{(activeCalcs.peakLoad / 1000).toFixed(2)} kW</h3>
+                <h3 className="text-2xl font-bold text-slate-900">{((activeCalcs.peakLoad || totalConnectedLoadW) / 1000).toFixed(2)} kW</h3>
                 <p className="text-[10px] text-slate-500">Includes startup overhead calculations.</p>
               </div>
 
               <div className="p-5 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
                 <span className="text-[10px] font-bold text-[#69BD45] uppercase tracking-widest">Daily Consumption</span>
-                <h3 className="text-2xl font-bold text-slate-900">{(activeCalcs.dailyEnergy / 1000).toFixed(2)} kWh</h3>
+                <h3 className="text-2xl font-bold text-slate-900">{totalDailyEnergyKwh.toFixed(2)} kWh</h3>
                 <p className="text-[10px] text-slate-500">Continuous daily electrical consumption.</p>
               </div>
 
               <div className="p-5 bg-slate-50 rounded-xl border border-slate-100 space-y-2">
                 <span className="text-[10px] font-bold text-purple-600 uppercase tracking-widest">Monthly Sizing</span>
-                <h3 className="text-2xl font-bold text-slate-900">{(activeCalcs.monthlyEnergy).toFixed(1)} kWh</h3>
+                <h3 className="text-2xl font-bold text-slate-900">{totalMonthlyEnergyKwh.toFixed(1)} kWh</h3>
                 <p className="text-[10px] text-slate-500">Monthly billing baseline calculation.</p>
               </div>
             </div>
@@ -947,7 +1005,7 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                         <td className="px-4 py-3 text-slate-600">{app.customWattage}W</td>
                         <td className="px-4 py-3 text-slate-600">{app.hoursUsed} hrs/day</td>
                         <td className="px-4 py-3 text-right font-bold text-slate-900">
-                          {((app.customWattage * app.quantity * app.hoursUsed) / 1000).toFixed(2)} kWh
+                          {(applianceDailyEnergyWh(app) / 1000).toFixed(2)} kWh
                         </td>
                       </tr>
                     ))}

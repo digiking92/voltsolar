@@ -2,14 +2,14 @@ import { ProjectAppliance } from '../../types';
 import { getSurgeMultiplier } from './engineeringStandards';
 
 export interface LoadCalculationResult {
-  connectedLoad: number;      // Watts
-  peakLoad: number;           // Watts (sum of wattage * surge multipliers)
-  dailyEnergy: number;         // Wh
-  monthlyEnergy: number;       // kWh
-  continuousLoadW: number;     // Watts
-  motorStartupLoadW: number;   // Watts
-  diversityFactor: number;     // Ratio of expected simultaneous usage (typically 0.8)
-  designLoadW: number;         // Design benchmark peak load including safety factor
+  connectedLoad: number; // Watts
+  peakLoad: number; // Watts
+  dailyEnergy: number; // Wh
+  monthlyEnergy: number; // kWh
+  continuousLoadW: number;
+  motorStartupLoadW: number;
+  diversityFactor: number;
+  designLoadW: number;
   loadBreakdown: {
     applianceName: string;
     wattage: number;
@@ -20,6 +20,29 @@ export interface LoadCalculationResult {
   }[];
 }
 
+/** Single source of truth for one appliance's daily Wh (same math as scheduler cards). */
+export function applianceDailyEnergyWh(app: {
+  customWattage?: number | null;
+  quantity?: number | null;
+  hoursUsed?: number | null;
+}): number {
+  const wattage = Math.max(0, Number(app.customWattage) || 0);
+  const quantity = Math.max(0, Number(app.quantity) || 0);
+  const hours = Math.max(0, Number(app.hoursUsed) || 0);
+  return wattage * quantity * hours;
+}
+
+/** Sum of all appliances' daily energy in Wh — never depends on design solvers. */
+export function sumApplianceDailyEnergyWh(
+  appliances: Array<{
+    customWattage?: number | null;
+    quantity?: number | null;
+    hoursUsed?: number | null;
+  }>
+): number {
+  return appliances.reduce((sum, app) => sum + applianceDailyEnergyWh(app), 0);
+}
+
 export function calculateLoadSchedule(appliances: ProjectAppliance[]): LoadCalculationResult {
   let connectedLoad = 0;
   let dailyEnergy = 0;
@@ -28,25 +51,24 @@ export function calculateLoadSchedule(appliances: ProjectAppliance[]): LoadCalcu
 
   const loadBreakdown: LoadCalculationResult['loadBreakdown'] = [];
 
-  appliances.forEach((app) => {
-    const wattage = app.customWattage;
-    const qty = app.quantity;
-    const hours = app.hoursUsed;
+  appliances.forEach(app => {
+    const wattage = Math.max(0, Number(app.customWattage) || 0);
+    const qty = Math.max(0, Number(app.quantity) || 0);
+    const hours = Math.max(0, Number(app.hoursUsed) || 0);
     const totalWatts = wattage * qty;
-    
+
     connectedLoad += totalWatts;
 
-    // Prefer explicit surge (custom appliances); else name-based engineering table
     const surgeMultiplier =
       typeof app.surgeMultiplier === 'number' && app.surgeMultiplier > 0
         ? app.surgeMultiplier
         : getSurgeMultiplier(app.applianceName);
     const itemPeakLoad = totalWatts * surgeMultiplier;
-    
+
     dailyEnergy += totalWatts * hours;
 
     if (surgeMultiplier > 1.2) {
-      motorStartupLoadW += (itemPeakLoad - totalWatts);
+      motorStartupLoadW += itemPeakLoad - totalWatts;
     } else {
       continuousLoadW += totalWatts;
     }
@@ -57,17 +79,12 @@ export function calculateLoadSchedule(appliances: ProjectAppliance[]): LoadCalcu
       quantity: qty,
       surgeMultiplier,
       peakLoadW: itemPeakLoad,
-      dailyEnergyWh: totalWatts * hours,
+      dailyEnergyWh: totalWatts * hours
     });
   });
 
-  const monthlyEnergy = (dailyEnergy * 30) / 1000; // Wh to kWh
-
-  // Apply a diversity factor for simultaneous usage (standard engineering practice: 0.8)
+  const monthlyEnergy = (dailyEnergy * 30) / 1000;
   const diversityFactor = 0.8;
-  // Design peak = diversified continuous + motor startups.
-  // Do NOT treat peak as the sum of every appliance at locked-rotor at once —
-  // that overstates demand and falsely blocks valid residential designs.
   const designLoadW = Math.round(connectedLoad * diversityFactor + motorStartupLoadW);
 
   return {
@@ -79,6 +96,6 @@ export function calculateLoadSchedule(appliances: ProjectAppliance[]): LoadCalcu
     motorStartupLoadW,
     diversityFactor,
     designLoadW,
-    loadBreakdown,
+    loadBreakdown
   };
 }

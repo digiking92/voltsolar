@@ -133,7 +133,7 @@ export function sizeProtectionDevices(
 
   const maxInverterDcCurrent = inverterPowerW / (batteryVoltageNum * 0.96);
   const recommendedBatteryBreakerRating = maxInverterDcCurrent * 1.25;
-  const standardBatteryBreakers = [63, 80, 100, 125, 160, 200, 250, 315, 400];
+  const standardBatteryBreakers = [63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630];
   const selectedBatteryBreaker = nextStandardRating(
     recommendedBatteryBreakerRating,
     standardBatteryBreakers
@@ -165,7 +165,7 @@ export function sizeProtectionDevices(
 
   const maxAcOutputCurrent = inverterAcLineCurrentA(inverterPowerW, phases);
   const recommendedAcBreakerRating = maxAcOutputCurrent * 1.25;
-  const standardAcBreakers = [10, 16, 20, 25, 32, 40, 50, 63, 80, 100];
+  const standardAcBreakers = [10, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315];
   const selectedAcBreaker = nextStandardRating(
     recommendedAcBreakerRating,
     standardAcBreakers
