@@ -348,7 +348,7 @@ export function buildDesignNotes(params: {
   if (stringVmp > 0 && mpptVmpMin > 0 && stringVmp >= mpptVmpMin && stringVmp <= mpptVmpMax) {
     notes.push({
       level: 'info',
-      message: `PV string voltage operates within the inverter MPPT window (${mpptVmpMin}-${mpptVmpMax} V; operating Vmp ~${stringVmp} V).`,
+      message: `Photovoltaic (PV) string voltage operates within the inverter Maximum Power Point Tracker (MPPT) window (${mpptVmpMin}-${mpptVmpMax} V; hot-weather maximum power voltage / Vmp ~${stringVmp} V).`,
       suggestion: 'No string reconfiguration is required for MPPT tracking under the modelled conditions.'
     });
   }

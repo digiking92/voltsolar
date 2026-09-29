@@ -473,6 +473,45 @@ export const INVERTERS: InverterSpecs[] = [
     topology: 'off_grid',
     phases: 1
   },
+  // Higher PV input current for large arrays that exceed 40 A per Maximum Power Point Tracker (MPPT)
+  {
+    brand: 'Deye',
+    model: 'SUN-30K-SG01HP3 30kVA Hybrid',
+    sizeKva: 30.0,
+    voltageV: 48,
+    mpptVocLimit: 550,
+    mpptVmpMin: 120,
+    mpptVmpMax: 500,
+    maxPvCurrent: 50,
+    maxPvPower: 39000,
+    numMppts: 2,
+    maxStringsPerMppt: 3,
+    efficiency: 0.97,
+    maxBatteryChargeCurrentA: 450,
+    maxBatteryDischargeCurrentA: 500,
+    surgeFactor: 2.0,
+    topology: 'hybrid',
+    phases: 1
+  },
+  {
+    brand: 'Felicity Solar',
+    model: 'LP-30KVA Commercial Off-Grid High-PV',
+    sizeKva: 30.0,
+    voltageV: 48,
+    mpptVocLimit: 500,
+    mpptVmpMin: 120,
+    mpptVmpMax: 450,
+    maxPvCurrent: 50,
+    maxPvPower: 40000,
+    numMppts: 2,
+    maxStringsPerMppt: 3,
+    efficiency: 0.96,
+    maxBatteryChargeCurrentA: 450,
+    maxBatteryDischargeCurrentA: 500,
+    surgeFactor: 2.0,
+    topology: 'off_grid',
+    phases: 1
+  },
 ];
 
 export function getInvertersForVoltage(

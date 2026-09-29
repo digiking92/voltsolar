@@ -136,9 +136,9 @@ export function runFullDesignCalculations(
               Math.round((1 - loadRes.connectedLoad / (inv.sizeKva * 1000)) * 100)
             );
             const pvChecks =
-              `PV Voltage Compatibility: YES (cold Voc ${layout.stringVocMax}V <= ${inv.mpptVocLimit}V). ` +
-              `MPPT Current Compatibility: YES (${layout.currentPerMppt}A <= ${inv.maxPvCurrent}A). ` +
-              `PV Power Compatibility: YES (${layout.totalPvPowerW}W <= ${inv.maxPvPower}W). ` +
+              `Photovoltaic (PV) Voltage Compatibility: YES (cold open-circuit voltage / Voc ${layout.stringVocMax}V <= ${inv.mpptVocLimit}V). ` +
+              `Maximum Power Point Tracker (MPPT) Current Compatibility: YES (${layout.currentPerMppt}A <= ${inv.maxPvCurrent}A). ` +
+              `Photovoltaic (PV) Power Compatibility: YES (${layout.totalPvPowerW}W <= ${inv.maxPvPower}W). ` +
               `Battery Voltage Compatibility: YES (${vSys}V). ` +
               `Future Expansion Margin: ~${expansionPct}%.`;
 
@@ -279,8 +279,8 @@ export function runFullDesignCalculations(
     0,
     Math.round((1 - loadRes.connectedLoad / Math.max(inv.sizeKva * 1000, 1)) * 100)
   );
-  const voltageMarginV = Math.max(0, (inv.mpptVocLimit || 0) - (layout.stringVocMax || 0));
-  const currentMarginA = Math.max(0, (inv.maxPvCurrent || 0) - (layout.currentPerMppt || 0));
+  const voltageMarginV = (inv.mpptVocLimit || 0) - (layout.stringVocMax || 0);
+  const currentMarginA = (inv.maxPvCurrent || 0) - (layout.currentPerMppt || 0);
 
   const validationWarnings = [
     ...audit.warnings,
@@ -467,6 +467,9 @@ export function runFullDesignCalculations(
     maxPvPowerW: inv.maxPvPower,
     seriesCount: layout.seriesCount,
     parallelCount: layout.parallelCount,
+    numMppts: inv.numMppts,
+    stringsPerMppt: layout.stringsPerMppt,
+    selectedPanelWattageWp: best.panel.sizeW,
     targetPvKw: parseFloat((best.targetPvWatts / 1000).toFixed(2)),
     panelSizingCompatibilityOk: true,
     panelSizingCompatibilityWarning: layout.panelSizingCompatibilityWarning,
@@ -485,6 +488,8 @@ export function runFullDesignCalculations(
       acRcdBreaker: protectionRes.acRcdBreaker,
       earthElectrode: protectionRes.earthElectrode,
       distributionBoard: protectionRes.distributionBoard,
+      protectionAdequacyOk: protectionRes.protectionAdequacyOk,
+      protectionAdequacyNotes: protectionRes.protectionAdequacyNotes,
       deviceDetails: protectionRes.deviceDetails
     },
 

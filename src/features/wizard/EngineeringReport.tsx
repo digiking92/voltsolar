@@ -141,13 +141,20 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
     calcs.panelQuantity > 0 ? Math.round((calcs.solarArrayKw * 1000) / calcs.panelQuantity) : panelSize;
 
   const validationChecks = [
-    { label: 'Continuous Load', pass: calcs.connectedLoad <= calcs.inverterSizeKva * 1000 },
+    { label: 'Total Connected Load', pass: calcs.connectedLoad <= calcs.inverterSizeKva * 1000 },
     { label: 'Peak Demand', pass: true },
     { label: 'Battery Nominal Voltage', pass: true },
-    { label: 'PV Open-Circuit Voltage (Voc)', pass: (calcs.stringVocMax || 0) <= (calcs.mpptVocLimit || 0) },
-    { label: 'PV Current (Imp / MPPT)', pass: meta.currentMarginA >= 0 },
-    { label: 'PV Power', pass: meta.powerMarginW >= 0 },
-    { label: 'Future Expansion', pass: meta.futureExpansionPercent >= 10 }
+    {
+      label: 'Photovoltaic (PV) Open-Circuit Voltage (Voc)',
+      pass: (calcs.stringVocMax || 0) <= (calcs.mpptVocLimit || 0)
+    },
+    {
+      label: 'Photovoltaic (PV) Current — Maximum Power Point Tracker (MPPT)',
+      pass: meta.pvCurrentOk
+    },
+    { label: 'Photovoltaic (PV) Power', pass: meta.powerMarginW >= 0 },
+    { label: 'Future Expansion', pass: meta.futureExpansionPercent >= 10 },
+    { label: 'Protection Device Adequacy', pass: meta.protectionAdequacyOk }
   ];
 
   return (
@@ -279,8 +286,9 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             </div>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-50/30 p-4 rounded-xl border border-slate-100">
               <div>
-                <span className="text-[11px] font-semibold text-slate-600 tracking-wide block">Continuous Load</span>
+                <span className="text-[11px] font-semibold text-slate-600 tracking-wide block">Total Connected Load</span>
                 <p className="text-base font-extrabold text-slate-800">{(calcs.connectedLoad / 1000).toFixed(2)} kW</p>
+                <p className="text-[10px] text-slate-500 mt-1">Sum of all appliance rated watts (not all run at once)</p>
               </div>
               <div>
                 <span className="text-[11px] font-semibold text-slate-600 tracking-wide block">Peak Demand</span>
@@ -295,6 +303,10 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
                 <p className="text-base font-extrabold text-[#69BD45]">{calcs.monthlyEnergy.toFixed(1)} kWh</p>
               </div>
             </div>
+            <p className="mt-3 text-[11px] text-slate-600 leading-relaxed max-w-3xl">
+              <span className="font-semibold text-slate-800">How peak demand is calculated: </span>
+              {meta.peakDemandDerivation}
+            </p>
           </div>
         )}
       </div>
@@ -392,8 +404,9 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             <p className="font-bold text-indigo-600 mt-1">{(calcs.batteryUtilizationPercent || 0).toFixed(0)}%</p>
           </div>
           <div className="p-3 border border-slate-100 rounded-xl">
-            <span className="text-slate-600 block text-[11px] font-semibold">Continuous Discharge</span>
+            <span className="text-slate-600 block text-[11px] font-semibold">Design Battery Discharge Current</span>
             <p className="font-bold text-red-600 mt-1">{(calcs.batteryContinuousCurrentA ?? 0).toFixed(1)} A</p>
+            <p className="text-[10px] text-slate-500 mt-1">From connected load × safety factor (not nameplate continuous)</p>
           </div>
           <div className="p-3 border border-slate-100 rounded-xl">
             <span className="text-slate-600 block text-[11px] font-semibold">Max Discharge Current</span>
@@ -482,32 +495,35 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
               ))}
             </div>
             <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-100 text-[11px] text-slate-600 leading-relaxed space-y-1.5">
-              <p className="font-bold text-slate-800">MPPT / charge controller</p>
+              <p className="font-bold text-slate-800">Maximum Power Point Tracker (MPPT) / charge controller</p>
               {inverterType === 'off_grid' ? (
                 <p>
-                  This off-grid pick is an <span className="font-semibold">all-in-one (AIO) with built-in MPPT</span>.
+                  This off-grid pick is an <span className="font-semibold">all-in-one (AIO) with built-in Maximum Power Point Tracker (MPPT)</span>.
                   You do <span className="font-semibold">not</span> need a separate solar charge controller for this design —
-                  PV strings connect to the unit’s PV/MPPT terminals.
+                  photovoltaic (PV) strings connect to the unit’s PV/MPPT terminals.
                 </p>
               ) : (
                 <p>
-                  This recommendation uses a <span className="font-semibold">hybrid / AIO with built-in MPPT(s)</span>.
+                  This recommendation uses a <span className="font-semibold">hybrid / all-in-one with built-in Maximum Power Point Tracker (MPPT)</span>.
                   You do <span className="font-semibold">not</span> buy a separate MPPT for the array in this design.
                 </p>
               )}
               <p>
-                <span className="font-semibold">Array → MPPT window: </span>
-                cold Voc ≤ <span className="font-mono font-bold">{calcs.stringVocMax ?? '—'} V</span>
+                <span className="font-semibold">Array → Maximum Power Point Tracker (MPPT) window: </span>
+                cold open-circuit voltage (Voc) ≤ <span className="font-mono font-bold">{calcs.stringVocMax ?? '—'} V</span>
                 {calcs.mpptVocLimit != null ? <> (inverter max {calcs.mpptVocLimit} V)</> : null}
                 {' · '}
-                string Vmp ~ <span className="font-mono font-bold">{calcs.stringVmpMax ?? '—'} V</span>
+                Standard Test Condition (STC) string maximum power voltage (Vmp) ~ <span className="font-mono font-bold">{calcs.stringVmpMax ?? '—'} V</span>
+                {' · '}
+                hot-weather Vmp ~ <span className="font-mono font-bold">{calcs.stringVmpHot ?? '—'} V</span>
                 {' · '}
                 current ~ <span className="font-mono font-bold">{calcs.currentPerMpptA ?? '—'} A</span>
                 {calcs.maxPvCurrentA != null ? <> / limit {calcs.maxPvCurrentA} A</> : null}.
               </p>
+              <p className="text-slate-700">{meta.mpptMappingDescription}</p>
               <p className="text-slate-500">
                 Only if you swap to a bare inverter/charger <span className="italic">without</span> PV input: buy an external
-                MPPT with Voc class above cold string Voc
+                Maximum Power Point Tracker (MPPT) with Voc class above cold string Voc
                 (≥ {calcs.stringVocMax ? Math.ceil(Number(calcs.stringVocMax) / 50) * 50 : '—'} V),
                 battery voltage {resolvedV} V, and charge current ≥ ~{(calcs.batteryMaxChargeCurrentA ?? 0).toFixed(0)} A.
               </p>
@@ -569,42 +585,25 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-              <tr>
-                <td className="px-4 py-3 font-semibold">Cold-Weather String Voc</td>
-                <td className="px-4 py-3 font-mono">{calcs.stringVocMax} V</td>
-                <td className="px-4 py-3 font-mono">{calcs.mpptVocLimit} V</td>
-                <td className="px-4 py-3 font-mono text-emerald-600">{meta.voltageMarginV} V</td>
-                <td className="px-4 py-3"><StatusBadge status="PASS" /></td>
-              </tr>
-              <tr>
-                <td className="px-4 py-3 font-semibold">String Vmp (Operating Window)</td>
-                <td className="px-4 py-3 font-mono">{calcs.stringVmpHot ?? calcs.stringVmpMax} V</td>
-                <td className="px-4 py-3 font-mono">
-                  {calcs.mpptVmpMin}-{calcs.mpptVmpMax} V
-                </td>
-                <td className="px-4 py-3 font-mono text-slate-500">Within window</td>
-                <td className="px-4 py-3"><StatusBadge status="PASS" /></td>
-              </tr>
-              <tr>
-                <td className="px-4 py-3 font-semibold">MPPT Operating Current</td>
-                <td className="px-4 py-3 font-mono">{meta.actualPvCurrentA} A</td>
-                <td className="px-4 py-3 font-mono">{meta.maxPvCurrentA} A</td>
-                <td className="px-4 py-3 font-mono text-emerald-600">{meta.currentMarginA} A</td>
-                <td className="px-4 py-3"><StatusBadge status="PASS" /></td>
-              </tr>
-              <tr>
-                <td className="px-4 py-3 font-semibold">PV Array Power</td>
-                <td className="px-4 py-3 font-mono">{meta.actualPvPowerW} W</td>
-                <td className="px-4 py-3 font-mono">{meta.maxPvPowerW} W</td>
-                <td className="px-4 py-3 font-mono text-emerald-600">{meta.powerMarginW} W</td>
-                <td className="px-4 py-3"><StatusBadge status="PASS" /></td>
-              </tr>
+              {meta.stringElectricalChecks.map(row => (
+                <tr key={row.label}>
+                  <td className="px-4 py-3 font-semibold">{row.label}</td>
+                  <td className="px-4 py-3 font-mono">{row.actual}</td>
+                  <td className="px-4 py-3 font-mono">{row.limit}</td>
+                  <td className={`px-4 py-3 font-mono ${row.pass ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {row.margin}
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={row.pass ? 'PASS' : 'FAIL'} />
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
         <p className="text-[11px] text-slate-500 mt-3">
-          Layout: {calcs.seriesCount ?? '-'} series × {calcs.parallelCount ?? '-'} parallel ({calcs.panelQuantity} panels).
-          Only electrically valid configurations are published.
+          Layout: {calcs.seriesCount ?? '-'} series × {calcs.parallelCount ?? '-'} parallel ({calcs.panelQuantity} panels
+          × {panelWpActual} watts-peak). {meta.mpptMappingDescription}
         </p>
         {meta.pvMarginNotes.length > 0 && (
           <div className="mt-4 space-y-2">
@@ -821,7 +820,7 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
         <SectionHeading>A. Engineering Summary</SectionHeading>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { l: 'Continuous Load', v: `${(calcs.connectedLoad / 1000).toFixed(2)} kW` },
+            { l: 'Total Connected Load', v: `${(calcs.connectedLoad / 1000).toFixed(2)} kW` },
             { l: 'Peak Demand', v: `${(calcs.peakLoad / 1000).toFixed(2)} kW` },
             { l: 'Daily Energy', v: `${(calcs.dailyEnergy / 1000).toFixed(2)} kWh` },
             { l: 'Recommended Inverter', v: `${calcs.inverterSizeKva} kVA ${meta.topologyLabel.split('(')[0].trim()}` },
@@ -830,7 +829,7 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
               v: `${resolvedV}V ${calcs.batteryCapacityAh}Ah ${meta.chemistryLabel}`
             },
             { l: 'Recommended PV Array', v: `${calcs.solarArrayKw} kWp` },
-            { l: 'Engineering Status', v: 'PASS' },
+            { l: 'Engineering Status', v: meta.overallStatus },
             { l: 'Design Confidence', v: `${meta.confidenceScore}%` }
           ].map(item => (
             <div key={item.l} className="p-4 rounded-xl border border-slate-200 bg-[#F7FAFC]">
@@ -858,7 +857,11 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           <DotRow label="Future Expansion" value={`${meta.futureExpansionPercent}%`} />
           <DotRow label="Cold Design Ambient" value={`${meta.ambientColdC} °C`} />
           <DotRow label="Hot Cell Temperature" value={`${meta.ambientHotC} °C`} />
-          <DotRow label="Preferred Panel Wattage" value={`${panelSize} Wp`} />
+          <DotRow label="Preferred Panel Wattage" value={`${panelSize} watts-peak (Wp)`} />
+          <DotRow label="Selected Panel Wattage" value={`${meta.selectedPanelWattageWp} watts-peak (Wp)`} />
+          <DotRow label="Panel Preference Note" value={meta.panelPreferenceNote} />
+          <DotRow label="Installed Battery Reserve" value={`${meta.installedBatteryReservePercent}%`} />
+          <DotRow label="Usable Battery Reserve" value={`${meta.usableBatteryReservePercent}%`} />
           <DotRow label="Project Classification" value={projectType === 'commercial' ? 'Commercial' : 'Residential'} />
         </div>
       </div>

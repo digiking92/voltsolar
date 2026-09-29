@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { Project, UserProfile } from '../types';
+import { getWizardMeta } from './projectDraft';
 
 const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL as string | undefined;
 const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -122,24 +123,30 @@ export const supabaseApi = {
         return null;
       }
 
-      return data.map((item: any) => ({
-        id: item.id,
-        userId: item.user_id,
-        projectName: item.project_name,
-        clientName: item.client_name,
-        phone: item.phone,
-        email: item.email,
-        location: item.location,
-        projectType: item.project_type,
-        backupHours: Number(item.backup_hours),
-        batteryType: item.battery_type,
-        systemVoltage: item.system_voltage,
-        inverterType: item.inverter_type,
-        panelSize: Number(item.panel_size),
-        createdAt: item.created_at,
-        appliances: Array.isArray(item.appliances) ? item.appliances : [],
-        calculations: item.calculations || undefined,
-      }));
+      return data.map((item: any) => {
+        const calculations = item.calculations || undefined;
+        const meta = getWizardMeta({ calculations } as Project);
+        return {
+          id: item.id,
+          userId: item.user_id,
+          projectName: item.project_name,
+          clientName: item.client_name,
+          phone: item.phone,
+          email: item.email,
+          location: item.location,
+          projectType: item.project_type,
+          backupHours: Number(item.backup_hours),
+          batteryType: item.battery_type,
+          systemVoltage: item.system_voltage,
+          inverterType: item.inverter_type,
+          panelSize: Number(item.panel_size),
+          createdAt: item.created_at,
+          appliances: Array.isArray(item.appliances) ? item.appliances : [],
+          calculations,
+          status: meta.status,
+          wizardStep: meta.step
+        };
+      });
     } catch (err) {
       console.warn('Supabase projects query failed. Falling back to local state:', err);
       return null;

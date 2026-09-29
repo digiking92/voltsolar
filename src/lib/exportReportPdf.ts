@@ -372,13 +372,20 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
       : panelSize;
 
   const validationChecks = [
-    { label: 'Continuous Load', pass: calcs.connectedLoad <= calcs.inverterSizeKva * 1000 },
+    { label: 'Total Connected Load', pass: calcs.connectedLoad <= calcs.inverterSizeKva * 1000 },
     { label: 'Peak Demand', pass: true },
     { label: 'Battery Nominal Voltage', pass: true },
-    { label: 'PV Open-Circuit Voltage (Voc)', pass: (calcs.stringVocMax || 0) <= (calcs.mpptVocLimit || 0) },
-    { label: 'PV Current (Imp / MPPT)', pass: meta.currentMarginA >= 0 },
-    { label: 'PV Power', pass: meta.powerMarginW >= 0 },
-    { label: 'Future Expansion', pass: meta.futureExpansionPercent >= 10 }
+    {
+      label: 'Photovoltaic (PV) Open-Circuit Voltage (Voc)',
+      pass: (calcs.stringVocMax || 0) <= (calcs.mpptVocLimit || 0)
+    },
+    {
+      label: 'Photovoltaic (PV) Current — Maximum Power Point Tracker (MPPT)',
+      pass: meta.pvCurrentOk
+    },
+    { label: 'Photovoltaic (PV) Power', pass: meta.powerMarginW >= 0 },
+    { label: 'Future Expansion', pass: meta.futureExpansionPercent >= 10 },
+    { label: 'Protection Device Adequacy', pass: meta.protectionAdequacyOk }
   ];
 
   const sldImage = await rasterizeSvgToPng(calcs.singleLineDiagramSvg || '');
@@ -465,11 +472,19 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     );
   }
   w.kvGrid([
-    { label: 'Continuous Load', value: `${(calcs.connectedLoad / 1000).toFixed(2)} kW` },
+    { label: 'Total Connected Load', value: `${(calcs.connectedLoad / 1000).toFixed(2)} kW` },
     { label: 'Peak Demand', value: `${(calcs.peakLoad / 1000).toFixed(2)} kW` },
     { label: 'Daily Energy', value: `${(calcs.dailyEnergy / 1000).toFixed(2)} kWh` },
     { label: 'Monthly Energy', value: `${calcs.monthlyEnergy.toFixed(1)} kWh` }
   ]);
+  w.body(`How peak demand is calculated: ${meta.peakDemandDerivation}`, {
+    size: 8,
+    color: COLORS.muted
+  });
+  w.body(
+    'Total Connected Load is the sum of all appliance rated watts. It is not continuous operating load — many appliances run only part of the day.',
+    { size: 8, color: COLORS.muted }
+  );
   w.rule();
 
   // --- 3. Components ---
@@ -515,7 +530,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     },
     { label: 'Utilization', value: `${(calcs.batteryUtilizationPercent || 0).toFixed(0)}%` },
     {
-      label: 'Continuous Discharge',
+      label: 'Design Battery Discharge Current',
       value: `${(calcs.batteryContinuousCurrentA ?? 0).toFixed(1)} A`
     },
     {
@@ -569,17 +584,18 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
 
   const mpptNote =
     inverterType === 'off_grid'
-      ? 'This off-grid pick is an all-in-one (AIO) with built-in MPPT. A separate solar charge controller is not required; PV strings connect to the unit PV/MPPT terminals.'
-      : 'This recommendation uses a hybrid / AIO with built-in MPPT(s). A separate MPPT is not required for this design.';
+      ? 'This off-grid pick is an all-in-one (AIO) with built-in Maximum Power Point Tracker (MPPT). A separate solar charge controller is not required; photovoltaic (PV) strings connect to the unit PV/MPPT terminals.'
+      : 'This recommendation uses a hybrid / all-in-one with built-in Maximum Power Point Tracker (MPPT). A separate MPPT is not required for this design.';
   w.body(mpptNote, { size: 8, color: COLORS.muted });
   w.body(
-    `Array -> MPPT: cold Voc <= ${calcs.stringVocMax ?? '-'} V${
+    `Array -> Maximum Power Point Tracker (MPPT): cold open-circuit voltage (Voc) <= ${calcs.stringVocMax ?? '-'} V${
       calcs.mpptVocLimit != null ? ` (limit ${calcs.mpptVocLimit} V)` : ''
-    } | string Vmp ~ ${calcs.stringVmpMax ?? '-'} V | current ~ ${calcs.currentPerMpptA ?? '-'} A${
+    } | Standard Test Condition (STC) string maximum power voltage (Vmp) ~ ${calcs.stringVmpMax ?? '-'} V | hot-weather Vmp ~ ${calcs.stringVmpHot ?? '-'} V | current ~ ${calcs.currentPerMpptA ?? '-'} A${
       calcs.maxPvCurrentA != null ? ` / limit ${calcs.maxPvCurrentA} A` : ''
     }.`,
     { size: 8, color: COLORS.muted }
   );
+  w.body(meta.mpptMappingDescription, { size: 8, color: COLORS.muted });
 
   w.table(
     ['Check', 'Status'],
@@ -602,40 +618,17 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   ]);
   w.table(
     ['Parameter', 'Actual', 'Limit', 'Margin', 'Status'],
-    [
-      [
-        'Cold-Weather String Voc',
-        `${calcs.stringVocMax ?? '-'} V`,
-        `${calcs.mpptVocLimit ?? '-'} V`,
-        `${meta.voltageMarginV} V`,
-        'PASS'
-      ],
-      [
-        'String Vmp',
-        `${calcs.stringVmpHot ?? calcs.stringVmpMax ?? '-'} V`,
-        `${calcs.mpptVmpMin ?? '-'}-${calcs.mpptVmpMax ?? '-'} V`,
-        'Within window',
-        'PASS'
-      ],
-      [
-        'MPPT Operating Current',
-        `${meta.actualPvCurrentA} A`,
-        `${meta.maxPvCurrentA} A`,
-        `${meta.currentMarginA} A`,
-        'PASS'
-      ],
-      [
-        'PV Array Power',
-        `${meta.actualPvPowerW} W`,
-        `${meta.maxPvPowerW} W`,
-        `${meta.powerMarginW} W`,
-        'PASS'
-      ]
-    ],
-    [2.2, 1.2, 1.4, 1.2, 0.8]
+    meta.stringElectricalChecks.map(row => [
+      row.label,
+      row.actual,
+      row.limit,
+      row.margin,
+      row.pass ? 'PASS' : 'FAIL'
+    ]),
+    [2.4, 1.1, 1.3, 1.1, 0.7]
   );
   w.body(
-    `Layout: ${calcs.seriesCount ?? '-'} series x ${calcs.parallelCount ?? '-'} parallel (${calcs.panelQuantity} panels).`,
+    `Layout: ${calcs.seriesCount ?? '-'} series x ${calcs.parallelCount ?? '-'} parallel (${calcs.panelQuantity} panels x ${panelWpActual} watts-peak). ${meta.mpptMappingDescription}`,
     { size: 8, color: COLORS.muted }
   );
   for (const note of meta.pvMarginNotes) {
@@ -775,7 +768,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   // --- Appendix A ---
   w.sectionTitle('A. Engineering Summary');
   w.kvGrid([
-    { label: 'Continuous Load', value: `${(calcs.connectedLoad / 1000).toFixed(2)} kW` },
+    { label: 'Total Connected Load', value: `${(calcs.connectedLoad / 1000).toFixed(2)} kW` },
     { label: 'Peak Demand', value: `${(calcs.peakLoad / 1000).toFixed(2)} kW` },
     { label: 'Daily Energy', value: `${(calcs.dailyEnergy / 1000).toFixed(2)} kWh` },
     {
@@ -808,7 +801,11 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     { label: 'Future Expansion', value: `${meta.futureExpansionPercent}%` },
     { label: 'Cold Design Ambient', value: `${meta.ambientColdC} C` },
     { label: 'Hot Cell Temperature', value: `${meta.ambientHotC} C` },
-    { label: 'Preferred Panel Wattage', value: `${panelSize} Wp` },
+    { label: 'Preferred Panel Wattage', value: `${panelSize} watts-peak (Wp)` },
+    { label: 'Selected Panel Wattage', value: `${meta.selectedPanelWattageWp} watts-peak (Wp)` },
+    { label: 'Panel Preference Note', value: meta.panelPreferenceNote },
+    { label: 'Installed Battery Reserve', value: `${meta.installedBatteryReservePercent}%` },
+    { label: 'Usable Battery Reserve', value: `${meta.usableBatteryReservePercent}%` },
     {
       label: 'Project Classification',
       value: projectType === 'commercial' ? 'Commercial' : 'Residential'

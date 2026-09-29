@@ -107,9 +107,11 @@ export function validateStringConfiguration(
       `String Vmp ${stringVmpNominal.toFixed(1)}V exceeds MPPT maximum ${inverter.mpptVmpMax}V.`
     );
   }
-  if (currentPerMppt > inverter.maxPvCurrent * 1.05) {
+  // Hard limit: actual operating current must not exceed the Maximum Power Point Tracker (MPPT) rating.
+  // Do not allow a silent soft tolerance — over-limit layouts must FAIL validation.
+  if (currentPerMppt > inverter.maxPvCurrent) {
     failures.push(
-      `MPPT operating current ${currentPerMppt.toFixed(1)}A exceeds inverter MPPT limit ${inverter.maxPvCurrent}A.`
+      `Maximum Power Point Tracker (MPPT) operating current ${currentPerMppt.toFixed(1)} A exceeds inverter MPPT limit ${inverter.maxPvCurrent} A.`
     );
   }
   if (stringsPerMppt > inverter.maxStringsPerMppt) {

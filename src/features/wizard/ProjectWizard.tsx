@@ -17,6 +17,12 @@ import { parseInverterReasonPoints } from '../../lib/calculations/reportPresenta
 import { Project, ProjectAppliance, BatteryType, SystemVoltage, InverterType, Calculations } from '../../types';
 import { EngineeringReport } from './EngineeringReport';
 import type { ReportPdfData } from '../../lib/exportReportPdf';
+import {
+  attachWizardMeta,
+  getWizardMeta,
+  hasCompletedSizing,
+  type ProjectStatus
+} from '../../lib/projectDraft';
 
 interface ProjectWizardProps {
   projectToEdit?: Project | null;
@@ -69,7 +75,10 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
   const [panelSize, setPanelSize] = useState<number>(550);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [isSavingProject, setIsSavingProject] = useState(false);
+  const [draftStatus, setDraftStatus] = useState<string>('');
+  const [persistedProject, setPersistedProject] = useState<Project | null>(projectToEdit || null);
   const reportRef = useRef<HTMLDivElement>(null);
+  const reportAutoSavedRef = useRef(false);
 
   const reportIssuedAt = useMemo(() => new Date(), []);
   const designId = useMemo(() => {
@@ -79,16 +88,17 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
     return `VS-${reportIssuedAt.getFullYear()}-${Math.abs(hash % 9000) + 1000}`;
   }, [projectName, clientName, location, backupHours, batteryType, systemVoltage, panelSize, appliancesList.length, reportIssuedAt]);
 
-  // Populate data if editing
+  // Populate data if editing / continuing a draft
   useEffect(() => {
     if (projectToEdit) {
+      setPersistedProject(projectToEdit);
       setProjectName(projectToEdit.projectName);
       setClientName(projectToEdit.clientName);
       setClientPhone(projectToEdit.phone || '');
       setClientEmail(projectToEdit.email || '');
       setLocation(projectToEdit.location);
       setProjectType(projectToEdit.projectType);
-      
+
       setAppliancesList(
         (projectToEdit.appliances || []).map(app => ({
           ...app,
@@ -97,7 +107,7 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
           hoursUsed: Math.max(0, Number(app.hoursUsed) || 0)
         }))
       );
-      
+
       const hours = projectToEdit.backupHours;
       if ([4, 6, 8, 12, 18, 24].includes(hours)) {
         setBackupHours(hours);
@@ -129,9 +139,11 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
           : ''
       );
 
-      setCurrentStep(8); // Open in Document Preview mode immediately
+      const meta = getWizardMeta(projectToEdit);
+      reportAutoSavedRef.current = meta.status === 'complete';
+      setCurrentStep(meta.status === 'complete' ? 8 : meta.step);
     } else {
-      // Set some sensible initial default empty template
+      setPersistedProject(null);
       setProjectName('');
       setClientName('');
       setClientPhone('');
@@ -148,8 +160,8 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       setPvCableDistanceM('');
       setBatteryCableDistanceM('');
       setAcCableDistanceM('');
-      
-      setCurrentStep(1); // Start at step 1 for new designs
+      reportAutoSavedRef.current = false;
+      setCurrentStep(1);
     }
   }, [projectToEdit]);
 
@@ -321,8 +333,78 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
   const activeCalcs = runActiveCalculations();
 
+  const buildProjectPayload = (status: ProjectStatus, step: number) => {
+    const actualBackupHours = isCustomHours ? parseInt(customHours, 10) || 8 : backupHours;
+    const liveCalcs = runActiveCalculations();
+    const calcsForSave =
+      status === 'complete' && !liveCalcs.isError
+        ? liveCalcs
+        : liveCalcs.dailyEnergy > 0 || liveCalcs.connectedLoad > 0
+          ? liveCalcs
+          : undefined;
+
+    return {
+      projectName: projectName.trim() || 'Untitled Draft',
+      clientName: clientName.trim() || 'Draft client',
+      phone: clientPhone,
+      email: clientEmail,
+      location: location.trim() || 'Draft location',
+      projectType,
+      backupHours: actualBackupHours,
+      batteryType,
+      systemVoltage,
+      inverterType,
+      panelSize,
+      appliances: appliancesList,
+      calculations: attachWizardMeta(calcsForSave, { status, step }),
+      status,
+      wizardStep: step
+    };
+  };
+
+  const persistProject = async (
+    status: ProjectStatus,
+    step: number,
+    options?: { closeAfter?: boolean; silent?: boolean }
+  ): Promise<Project | null> => {
+    if (isSavingProject) return persistedProject;
+    setIsSavingProject(true);
+    try {
+      const projectData = buildProjectPayload(status, step);
+      let saved: Project;
+      if (persistedProject) {
+        saved = {
+          ...persistedProject,
+          ...projectData
+        };
+        await updateProject(saved);
+      } else {
+        saved = await addProject(projectData);
+      }
+      setPersistedProject(saved);
+      if (!options?.silent) {
+        setDraftStatus(
+          status === 'complete'
+            ? 'Project saved with engineering report.'
+            : `Draft saved at step ${step}/8.`
+        );
+        window.setTimeout(() => setDraftStatus(''), 2500);
+      }
+      if (options?.closeAfter) onClose();
+      return saved;
+    } catch (err) {
+      console.error('Project save failed:', err);
+      const message =
+        err instanceof Error ? err.message : 'Could not save this project. Please try again.';
+      if (!options?.silent) window.alert(message);
+      return null;
+    } finally {
+      setIsSavingProject(false);
+    }
+  };
+
   // Navigation handlers
-  const handleNext = () => {
+  const handleNext = async () => {
     if (currentStep === 1) {
       if (!projectName || !clientName || !location) {
         alert('Please fill in Project Name, Client Name, and Installation Location to proceed.');
@@ -336,7 +418,15 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       }
     }
     if (currentStep < totalSteps) {
-      setCurrentStep(currentStep + 1);
+      const nextStep = currentStep + 1;
+      const status: ProjectStatus = nextStep >= totalSteps ? 'complete' : 'draft';
+      if (status === 'complete') reportAutoSavedRef.current = true;
+      setCurrentStep(nextStep);
+      await persistProject(status, nextStep, { silent: true });
+      setDraftStatus(
+        status === 'complete' ? 'Report ready — project auto-saved.' : `Draft saved · Step ${nextStep}/8`
+      );
+      window.setTimeout(() => setDraftStatus(''), 2500);
     }
   };
 
@@ -347,48 +437,28 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
   };
 
   const handleSaveProjectDesign = async () => {
-    if (isSavingProject) return;
-    const actualBackupHours = isCustomHours ? (parseInt(customHours, 10) || 8) : backupHours;
-    const finalCalcs = runActiveCalculations();
-
-    const projectData = {
-      projectName,
-      clientName,
-      phone: clientPhone,
-      email: clientEmail,
-      location,
-      projectType,
-      backupHours: actualBackupHours,
-      batteryType,
-      systemVoltage,
-      inverterType,
-      panelSize,
-      appliances: appliancesList,
-      calculations: finalCalcs
-    };
-
-    setIsSavingProject(true);
-    try {
-      if (projectToEdit) {
-        await updateProject({
-          ...projectToEdit,
-          ...projectData
-        });
-      } else {
-        await addProject(projectData);
-      }
-      onClose();
-    } catch (err) {
-      console.error('Project save failed:', err);
-      const message =
-        err instanceof Error
-          ? err.message
-          : 'Could not save this project. Please try again.';
-      window.alert(message);
-    } finally {
-      setIsSavingProject(false);
-    }
+    await persistProject('complete', 8, { closeAfter: true });
   };
+
+  const handleSaveDraftOnly = async () => {
+    if (currentStep === 1 && !projectName.trim() && !clientName.trim() && !location.trim()) {
+      window.alert('Enter at least a project name, client name, or location before saving a draft.');
+      return;
+    }
+    const status: ProjectStatus = currentStep >= totalSteps ? 'complete' : 'draft';
+    await persistProject(status, currentStep);
+  };
+
+  // Auto-save when the engineering report step is reached with valid sizing
+  useEffect(() => {
+    if (currentStep !== 8) return;
+    if (activeCalcs.isError) return;
+    if (!hasCompletedSizing(activeCalcs)) return;
+    if (reportAutoSavedRef.current) return;
+    reportAutoSavedRef.current = true;
+    void persistProject('complete', 8, { silent: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally once per report landing
+  }, [currentStep, activeCalcs.isError, activeCalcs.solarArrayKw, activeCalcs.inverterSizeKva]);
 
   const handleDownloadPdf = async () => {
     if (isDownloadingPdf) return;
@@ -453,6 +523,11 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
               currentStep === 7 ? 'Solar Array Grid sizing' :
               'Completed Engineering Results'
             }
+            {draftStatus ? (
+              <span className="ml-2 text-[#69BD45] font-semibold">· {draftStatus}</span>
+            ) : isSavingProject ? (
+              <span className="ml-2 text-[#156DB7] font-semibold">· Saving…</span>
+            ) : null}
           </p>
         </div>
         <button
@@ -1479,9 +1554,9 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
               >
                 {isSavingProject
                   ? 'Saving to cloud…'
-                  : projectToEdit
-                    ? 'Save Changes & Close Document'
-                    : 'Save Sizing Project Design'}
+                  : persistedProject
+                    ? 'Save Updates & Close'
+                    : 'Save Project & Close'}
               </button>
             </div>
           </motion.div>
@@ -1492,27 +1567,45 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
       {/* Navigation Buttons at bottom */}
       {currentStep < totalSteps && (
-        <div className="flex justify-between items-center pt-6 border-t border-slate-200">
+        <div className="flex flex-col-reverse sm:flex-row justify-between items-stretch sm:items-center gap-3 pt-6 border-t border-slate-200">
           <button
             id="wiz-back-btn"
             type="button"
             disabled={currentStep === 1}
             onClick={handleBack}
-            className="inline-flex items-center space-x-2 px-5 py-3 border border-slate-200 hover:border-slate-300 text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl font-semibold text-xs transition-colors"
+            className="inline-flex items-center justify-center space-x-2 px-5 py-3 border border-slate-200 hover:border-slate-300 text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl font-semibold text-xs transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
             <span>Back</span>
           </button>
 
-          <button
-            id="wiz-next-btn"
-            type="button"
-            onClick={handleNext}
-            className="inline-flex items-center space-x-2 px-6 py-3 bg-[#156DB7] hover:bg-[#0F5288] text-white rounded-xl font-semibold text-xs shadow-sm transition-all transform hover:-translate-y-0.5"
-          >
-            <span>{currentStep === totalSteps - 1 ? 'Generate Calculations' : 'Next Step'}</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
+            <button
+              id="wiz-save-draft-btn"
+              type="button"
+              disabled={isSavingProject}
+              onClick={() => void handleSaveDraftOnly()}
+              className="inline-flex items-center justify-center px-5 py-3 border border-slate-200 hover:border-[#156DB7]/40 hover:bg-[#156DB7]/5 text-slate-700 disabled:opacity-60 rounded-xl font-semibold text-xs transition-colors"
+            >
+              {isSavingProject ? 'Saving…' : 'Save Draft'}
+            </button>
+            <button
+              id="wiz-next-btn"
+              type="button"
+              disabled={isSavingProject}
+              onClick={() => void handleNext()}
+              className="inline-flex items-center justify-center space-x-2 px-6 py-3 bg-[#156DB7] hover:bg-[#0F5288] disabled:opacity-60 text-white rounded-xl font-semibold text-xs shadow-sm transition-all transform hover:-translate-y-0.5"
+            >
+              <span>
+                {isSavingProject
+                  ? 'Saving draft…'
+                  : currentStep === totalSteps - 1
+                    ? 'Generate Report'
+                    : 'Continue'}
+              </span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
     </div>

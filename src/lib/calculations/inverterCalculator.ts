@@ -154,8 +154,8 @@ export function searchCompatibleInverters(
       Math.round((1 - connectedLoadW / Math.max(inverter.sizeKva * 1000, 1)) * 100)
     );
     const reason =
-      `${inverter.brand} ${inverter.model} (${inverter.sizeKva} kVA) selected. ` +
-      `Continuous Load: ${continuousKw.toFixed(2)} kW within ${inverter.sizeKva} kVA rating. ` +
+      `${inverter.brand} ${inverter.model} (${inverter.sizeKva} kilovolt-ampere / kVA) selected. ` +
+      `Total Connected Load: ${continuousKw.toFixed(2)} kW within ${inverter.sizeKva} kVA rating. ` +
       `Peak Demand: ${peakKw.toFixed(2)} kW. ` +
       `Surge Requirement: ${peakKw.toFixed(2)} kW <= ${surgeKw.toFixed(1)} kW inverter surge capacity. ` +
       `Battery Voltage Compatibility: ${systemVoltage}V bus supported. ` +

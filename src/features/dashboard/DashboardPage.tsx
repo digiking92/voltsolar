@@ -1,8 +1,8 @@
 import React from 'react';
-import { motion } from 'motion/react';
-import { Plus, FolderHeart, User, Sliders, TrendingUp, Cpu, Battery, Layers, ArrowRight } from 'lucide-react';
+import { Plus, FolderHeart, User, Sliders, Cpu, Battery, Layers, ArrowRight, Trash2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Project } from '../../types';
+import { getWizardMeta, hasCompletedSizing, projectStatusLabel } from '../../lib/projectDraft';
 
 interface DashboardPageProps {
   onNavigateToTab: (tab: string) => void;
@@ -10,14 +10,12 @@ interface DashboardPageProps {
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, onEditProject }) => {
-  const { currentUser, projects, duplicateProject } = useApp();
+  const { currentUser, projects, duplicateProject, deleteProject } = useApp();
 
-  // Stats calculation
   const totalProjects = projects.length;
-  const totalDesigns = projects.filter(p => p.calculations).length;
-  const totalSaved = projects.length; // Local persistence counts all as saved
+  const totalDesigns = projects.filter(p => hasCompletedSizing(p.calculations)).length;
+  const totalSaved = projects.length;
 
-  // Date formatter
   const formatDate = (isoString: string) => {
     return new Date(isoString).toLocaleDateString('en-US', {
       month: 'short',
@@ -36,9 +34,17 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, o
     }
   };
 
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to delete the project "${name}"?`)) return;
+    try {
+      await deleteProject(id);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Could not delete this project.');
+    }
+  };
+
   return (
     <div className="space-y-8">
-      {/* Welcome header banner */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-slate-900">
@@ -58,7 +64,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, o
         </button>
       </div>
 
-      {/* Quick Statistics Banner */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white border border-slate-200/60 rounded-2xl p-6 shadow-sm flex items-center space-x-4">
           <div className="w-12 h-12 rounded-xl bg-[#156DB7]/10 flex items-center justify-center text-[#156DB7]">
@@ -91,15 +96,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, o
         </div>
       </div>
 
-      {/* Primary Grid: Recent Projects & Quick Actions */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Recent Projects */}
         <div className="lg:col-span-2 bg-white border border-slate-200/60 rounded-2xl p-6 shadow-sm space-y-6">
           <div className="flex justify-between items-center pb-4 border-b border-slate-100">
             <h2 className="text-lg font-bold text-slate-900">Recent Sizing Projects</h2>
-            <button 
+            <button
               id="dash-view-all-projects"
-              onClick={() => onNavigateToTab('projects')} 
+              onClick={() => onNavigateToTab('projects')}
               className="text-xs font-semibold text-[#156DB7] hover:text-[#0F5288] inline-flex items-center space-x-1 transition-colors"
             >
               <span>View All Projects</span>
@@ -112,7 +115,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, o
               <FolderHeart className="w-12 h-12 text-slate-300 mx-auto" />
               <div>
                 <p className="text-sm font-bold text-slate-700">No projects started yet</p>
-                <p className="text-xs text-slate-400 mt-1">Begin your first solar design calculations using our guided wizard.</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Begin your first solar design calculations using our guided wizard.
+                </p>
               </div>
               <button
                 id="dash-empty-create"
@@ -125,52 +130,81 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, o
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {recentProjects.map((p) => (
-                <div key={p.id} className="py-4 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <h3 className="text-sm font-bold text-slate-800 hover:text-[#156DB7] cursor-pointer" onClick={() => onEditProject(p)}>
-                      {p.projectName}
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      Client: <span className="font-semibold text-slate-700">{p.clientName}</span> • Location: <span className="font-semibold text-slate-700">{p.location}</span>
-                    </p>
-                    <p className="text-[10px] font-mono text-slate-400">
-                      Created: {formatDate(p.createdAt)}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    {p.calculations && (
-                      <div className="hidden sm:block text-right mr-4">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#69BD45]/15 text-[#5AAB3C]">
-                          {p.calculations.solarArrayKw} kWp PV Array
+              {recentProjects.map(p => {
+                const meta = getWizardMeta(p);
+                const complete = hasCompletedSizing(p.calculations);
+                return (
+                  <div
+                    key={p.id}
+                    className="py-4 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3
+                          className="text-sm font-bold text-slate-800 hover:text-[#156DB7] cursor-pointer"
+                          onClick={() => onEditProject(p)}
+                        >
+                          {p.projectName}
+                        </h3>
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            meta.status === 'draft'
+                              ? 'bg-amber-50 text-amber-700'
+                              : 'bg-[#69BD45]/15 text-[#5AAB3C]'
+                          }`}
+                        >
+                          {projectStatusLabel(p)}
                         </span>
-                        <p className="text-[10px] text-slate-400 mt-0.5">{p.calculations.batteryQuantity}x Batteries</p>
                       </div>
-                    )}
-                    <button
-                      id={`recent-view-${p.id}`}
-                      onClick={() => onEditProject(p)}
-                      className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-700 rounded-lg border border-slate-200 transition-colors"
-                    >
-                      View / Edit
-                    </button>
-                    <button
-                      id={`recent-dup-${p.id}`}
-                      onClick={() => void handleDuplicate(p.id)}
-                      className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg transition-colors"
-                      title="Duplicate"
-                    >
-                      <Layers className="w-4 h-4" />
-                    </button>
+                      <p className="text-xs text-slate-500">
+                        Client: <span className="font-semibold text-slate-700">{p.clientName}</span> • Location:{' '}
+                        <span className="font-semibold text-slate-700">{p.location}</span>
+                      </p>
+                      <p className="text-[10px] font-mono text-slate-400">Created: {formatDate(p.createdAt)}</p>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      {complete && p.calculations ? (
+                        <div className="hidden sm:block text-right mr-4">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#69BD45]/15 text-[#5AAB3C]">
+                            {p.calculations.solarArrayKw} kWp PV Array
+                          </span>
+                          <p className="text-[10px] text-slate-400 mt-0.5">
+                            {p.calculations.batteryQuantity}x Batteries
+                          </p>
+                        </div>
+                      ) : null}
+                      <button
+                        id={`recent-view-${p.id}`}
+                        onClick={() => onEditProject(p)}
+                        className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-xs font-bold text-slate-700 rounded-lg border border-slate-200 transition-colors"
+                      >
+                        {meta.status === 'draft' ? 'Continue' : 'View / Edit'}
+                      </button>
+                      <button
+                        id={`recent-dup-${p.id}`}
+                        onClick={() => void handleDuplicate(p.id)}
+                        className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg transition-colors"
+                        title="Duplicate"
+                      >
+                        <Layers className="w-4 h-4" />
+                      </button>
+                      <button
+                        id={`recent-del-${p.id}`}
+                        onClick={() => void handleDelete(p.id, p.projectName)}
+                        className="p-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                        title="Delete project"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
 
-        {/* Quick Actions Panel */}
         <div className="bg-white border border-slate-200/60 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
           <div>
             <h2 className="text-lg font-bold text-slate-900 pb-4 border-b border-slate-100">Quick Actions</h2>
@@ -199,7 +233,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, o
                 </div>
                 <div>
                   <h4 className="text-xs font-bold text-slate-800 group-hover:text-[#69BD45]">My Projects</h4>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Explore your completed layouts.</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Explore your drafts and completed layouts.</p>
                 </div>
               </button>
 
@@ -233,10 +267,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigateToTab, o
             </div>
           </div>
 
-          {/* Premium Help Note */}
           <div className="mt-8 p-4 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-500 leading-relaxed">
             <span className="font-bold text-[#123A63] block mb-1">Calculation Standards</span>
-            All calculation results generated by the VoltSolar platform conform to residential sizing safety factors and battery Depth of Discharge (DoD) allowances.
+            All calculation results generated by the VoltSolar platform conform to residential sizing safety factors
+            and battery Depth of Discharge (DoD) allowances.
           </div>
         </div>
       </div>

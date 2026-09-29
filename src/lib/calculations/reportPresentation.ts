@@ -55,6 +55,17 @@ export interface EngineeringReportMeta {
   actualPvPowerW: number;
   maxPvCurrentA: number;
   maxPvPowerW: number;
+  /** True when Maximum Power Point Tracker (MPPT) current is within limit */
+  pvCurrentOk: boolean;
+  /** True when protection devices meet calculated ampere requirements */
+  protectionAdequacyOk: boolean;
+  peakDemandDerivation: string;
+  mpptMappingDescription: string;
+  installedBatteryReservePercent: number;
+  usableBatteryReservePercent: number;
+  selectedPanelWattageWp: number;
+  preferredPanelWattageWp: number;
+  panelPreferenceNote: string;
   selectionJustifications: {
     inverter: JustificationRow[];
     battery: JustificationRow[];
@@ -62,20 +73,27 @@ export interface EngineeringReportMeta {
     protection: string;
   };
   pvMarginNotes: string[];
+  stringElectricalChecks: {
+    label: string;
+    actual: string;
+    limit: string;
+    margin: string;
+    pass: boolean;
+  }[];
 }
 
 const CHEMISTRY_LABELS: Record<BatteryType, string> = {
-  lithium: 'LiFePO4',
+  lithium: 'Lithium Iron Phosphate (LiFePO4)',
   tubular: 'Tubular Lead-Acid',
-  agm: 'AGM Lead-Acid',
+  agm: 'Absorbent Glass Mat (AGM) Lead-Acid',
   gel: 'Gel Lead-Acid'
 };
 
 const TOPOLOGY_LABELS: Record<InverterType, string> = {
   auto: 'Hybrid (Auto-Selected)',
   hybrid: 'Hybrid',
-  off_grid: 'Off-Grid',
-  grid_tie: 'Grid-Tie'
+  off_grid: 'Off-Grid (Standalone)',
+  grid_tie: 'Grid-Tied Hybrid'
 };
 
 function cableAmpacityFromSizeString(sizeStr?: string): number {
@@ -130,11 +148,43 @@ export function buildEngineeringReportMeta(
   const maxPvPowerW = calcs.maxPvPowerW ?? 0;
   const actualPvCurrentA = calcs.currentPerMpptA ?? calcs.stringIscMax ?? 0;
   const actualPvPowerW = calcs.solarArrayKw * 1000;
-  const voltageMarginV = Math.max(0, (calcs.mpptVocLimit || 0) - (calcs.stringVocMax || 0));
-  const currentMarginA = Math.max(0, maxPvCurrentA - actualPvCurrentA);
-  const powerMarginW = Math.max(0, maxPvPowerW - actualPvPowerW);
+  // Signed margins — negative means over limit (must FAIL, not hide behind Math.max(0, …))
+  const voltageMarginV = (calcs.mpptVocLimit || 0) - (calcs.stringVocMax || 0);
+  const currentMarginA = maxPvCurrentA - actualPvCurrentA;
+  const powerMarginW = maxPvPowerW - actualPvPowerW;
+  const pvCurrentOk = maxPvCurrentA <= 0 || actualPvCurrentA <= maxPvCurrentA;
+  const pvVoltageOk = voltageMarginV >= 0 && calcs.panelSizingCompatibilityOk !== false;
+  const pvPowerOk = maxPvPowerW <= 0 || actualPvPowerW <= maxPvPowerW;
+  const protectionAdequacyOk = calcs.protectionSchedule?.protectionAdequacyOk !== false;
+  const protectionNotes = calcs.protectionSchedule?.protectionAdequacyNotes || [];
 
-  // Confidence score: start 100, deduct for warnings / tight margins
+  const selectedPanelWattageWp =
+    calcs.selectedPanelWattageWp ??
+    (calcs.panelQuantity > 0
+      ? Math.round((calcs.solarArrayKw * 1000) / calcs.panelQuantity)
+      : inputs.panelSize);
+  const preferredPanelWattageWp = inputs.panelSize;
+  const panelPreferenceNote =
+    selectedPanelWattageWp === preferredPanelWattageWp
+      ? `Selected module wattage matches the preferred ${preferredPanelWattageWp} watts-peak (Wp) choice.`
+      : `Preferred panel wattage was ${preferredPanelWattageWp} watts-peak (Wp). The engine selected ${selectedPanelWattageWp} Wp modules because that combination scored better for Maximum Power Point Tracker (MPPT) voltage/current fit while still meeting the daily energy target.`;
+
+  const numMppts = calcs.numMppts ?? 0;
+  const stringsPerMppt = calcs.stringsPerMppt ?? 0;
+  const seriesCount = calcs.seriesCount ?? 0;
+  const parallelCount = calcs.parallelCount ?? 0;
+  const mpptMappingDescription =
+    numMppts > 0 && seriesCount > 0 && stringsPerMppt > 0
+      ? `Array layout ${seriesCount} panels in series × ${parallelCount} parallel strings, split across ${numMppts} Maximum Power Point Tracker (MPPT) input(s): approximately ${stringsPerMppt} string(s) per MPPT → ${actualPvCurrentA.toFixed(1)} A operating current per MPPT (limit ${maxPvCurrentA} A).`
+      : `Array layout ${seriesCount} series × ${parallelCount} parallel. Confirm Maximum Power Point Tracker (MPPT) string mapping on the inverter datasheet before installation.`;
+
+  const diversity = calcs.diversityFactor ?? 0.8;
+  const connectedKw = calcs.connectedLoad / 1000;
+  const motorStartupKw = (calcs.motorStartupLoadW ?? 0) / 1000;
+  const peakKw = calcs.peakLoad / 1000;
+  const peakDemandDerivation = `Peak demand = (Total Connected Load × Diversity Factor ${diversity}) + Motor/Compressor Starting Surplus = (${connectedKw.toFixed(2)} kW × ${diversity}) + ${motorStartupKw.toFixed(2)} kW = ${peakKw.toFixed(2)} kW. Diversity accounts for appliances that do not all run at full rated power at the same time; motor surplus covers compressor and pump start-up current.`;
+
+  // Confidence score: start 100, deduct for warnings / tight margins / hard failures
   let confidenceScore = 100;
   const confidenceReasons: string[] = [];
   const warnings = calcs.validationWarnings || [];
@@ -150,26 +200,44 @@ export function buildEngineeringReportMeta(
       ...warnings.filter(w => w.level === 'warning').map(w => w.message)
     );
   }
+  if (!pvCurrentOk) {
+    confidenceScore -= 25;
+    confidenceReasons.push(
+      `Maximum Power Point Tracker (MPPT) operating current ${actualPvCurrentA.toFixed(1)} A exceeds the inverter limit ${maxPvCurrentA} A — FAIL.`
+    );
+  }
+  if (!protectionAdequacyOk) {
+    confidenceScore -= 25;
+    confidenceReasons.push(
+      ...(protectionNotes.length
+        ? protectionNotes
+        : ['One or more protection devices are rated below the calculated requirement — FAIL.'])
+    );
+  }
   if (futureExpansionPercent < 15) {
     confidenceScore -= 5;
     confidenceReasons.push('Future expansion headroom is limited (<15%).');
   }
   if (remainingReserveKwh < 0) {
     confidenceScore -= 10;
-    confidenceReasons.push('Daily PV net energy is below customer consumption.');
+    confidenceReasons.push('Daily photovoltaic (PV) net energy is below customer consumption.');
   } else if (remainingReserveKwh < dailyConsumptionKwh * 0.1) {
     confidenceScore -= 4;
     confidenceReasons.push('Daily energy reserve margin is thin (<10% of consumption).');
   }
-  if (voltageMarginV < 20) {
+  if (pvVoltageOk && voltageMarginV < 20) {
     confidenceScore -= 3;
-    confidenceReasons.push('Cold-weather Voc margin to inverter limit is narrow.');
+    confidenceReasons.push(
+      'Cold-weather open-circuit voltage (Voc) margin to the inverter limit is narrow.'
+    );
   }
-  if (currentMarginA < 2 && maxPvCurrentA > 0) {
+  if (pvCurrentOk && currentMarginA < 2 && maxPvCurrentA > 0) {
     confidenceScore -= 3;
-    confidenceReasons.push('MPPT current headroom is narrow.');
+    confidenceReasons.push(
+      'Maximum Power Point Tracker (MPPT) current headroom is narrow.'
+    );
   }
-  confidenceScore = Math.max(55, Math.min(100, Math.round(confidenceScore)));
+  confidenceScore = Math.max(40, Math.min(100, Math.round(confidenceScore)));
   if (confidenceReasons.length === 0) {
     confidenceReasons.push('No warnings. All hard electrical and capacity checks passed.');
   }
@@ -179,18 +247,38 @@ export function buildEngineeringReportMeta(
     (calcs.cableSizing?.batteryCableVoltageDropPercent ?? 99) <= 1.0 &&
     (calcs.cableSizing?.acCableVoltageDropPercent ?? 99) <= 3.0;
 
+  const hotVmpOk =
+    (calcs.stringVmpHot ?? calcs.stringVmpMax ?? 0) >= (calcs.mpptVmpMin || 0) &&
+    (calcs.stringVmpHot ?? calcs.stringVmpMax ?? 0) <= (calcs.mpptVmpMax || Infinity);
+
   const passport: DesignPassportItem[] = [
     { label: 'Battery Bank Design', status: 'PASS' },
     {
-      label: 'PV Array Design',
+      label: 'Photovoltaic (PV) Array Design',
       status: calcs.panelSizingCompatibilityOk === false ? 'FAIL' : remainingReserveKwh < 0 ? 'REVIEW' : 'PASS'
     },
     { label: 'Inverter Compatibility', status: 'PASS' },
-    { label: 'Protection Design', status: calcs.protectionSchedule?.deviceDetails?.length ? 'PASS' : 'REVIEW' },
+    {
+      label: 'Protection Design',
+      status: !calcs.protectionSchedule?.deviceDetails?.length
+        ? 'REVIEW'
+        : protectionAdequacyOk
+          ? 'PASS'
+          : 'FAIL'
+    },
     { label: 'Cable Design', status: cablePass ? 'PASS' : 'REVIEW' },
-    { label: 'Voltage Validation', status: voltageMarginV >= 0 && calcs.panelSizingCompatibilityOk !== false ? 'PASS' : 'FAIL' },
-    { label: 'Current Validation', status: currentMarginA >= 0 ? 'PASS' : 'FAIL' },
-    { label: 'Power Validation', status: powerMarginW >= 0 ? 'PASS' : 'FAIL' }
+    {
+      label: 'Voltage Validation',
+      status: pvVoltageOk ? 'PASS' : 'FAIL'
+    },
+    {
+      label: 'Current Validation',
+      status: pvCurrentOk ? 'PASS' : 'FAIL'
+    },
+    {
+      label: 'Power Validation',
+      status: pvPowerOk ? 'PASS' : 'FAIL'
+    }
   ];
 
   if (dangerCount > 0) {
@@ -199,50 +287,100 @@ export function buildEngineeringReportMeta(
     });
   }
 
-  const overallStatus = passport.every(p => p.status === 'PASS') && confidenceScore >= 85
-    ? 'CERTIFIED'
-    : 'REVIEW REQUIRED';
+  // CERTIFIED only when every passport check is PASS and hard electrical gates are green
+  const hardGatesOk = pvCurrentOk && pvVoltageOk && pvPowerOk && protectionAdequacyOk && hotVmpOk;
+  const overallStatus =
+    passport.every(p => p.status === 'PASS') && hardGatesOk && confidenceScore >= 85
+      ? 'CERTIFIED'
+      : 'REVIEW REQUIRED';
 
-  const peakKw = calcs.peakLoad / 1000;
-  const continuousKw = calcs.connectedLoad / 1000;
   const usableBatt =
     calcs.batteryUsableKwh ?? calcs.batteryCapacityKwh * (calcs.batteryDodUsed || 0.9);
   const requiredBatt =
     calcs.batteryRequiredKwhRaw ??
     (calcs.dailyEnergy * (inputs.backupHours / 24)) / 1000;
-  const reservePct =
+  const installedBattKwh = calcs.batteryInstalledKwh || calcs.batteryCapacityKwh;
+  const installedBatteryReservePercent =
     requiredBatt > 0
-      ? Math.max(
-          0,
-          Math.round(
-            (((calcs.batteryInstalledKwh || calcs.batteryCapacityKwh) - requiredBatt) /
-              requiredBatt) *
-              100
-          )
-        )
+      ? Math.max(0, Math.round(((installedBattKwh - requiredBatt) / requiredBatt) * 100))
       : 0;
+  const usableBatteryReservePercent =
+    requiredBatt > 0
+      ? Math.max(0, Math.round(((usableBatt - requiredBatt) / requiredBatt) * 100))
+      : 0;
+
+  const stringElectricalChecks = [
+    {
+      label: 'Cold-Weather String Open-Circuit Voltage (Voc)',
+      actual: `${calcs.stringVocMax ?? '-'} V`,
+      limit: `${calcs.mpptVocLimit ?? '-'} V`,
+      margin: `${parseFloat(voltageMarginV.toFixed(1))} V`,
+      pass: pvVoltageOk
+    },
+    {
+      label: 'Hot-Weather String Maximum Power Voltage (Vmp)',
+      actual: `${calcs.stringVmpHot ?? calcs.stringVmpMax ?? '-'} V`,
+      limit: `${calcs.mpptVmpMin ?? '-'}-${calcs.mpptVmpMax ?? '-'} V`,
+      margin: hotVmpOk ? 'Within window' : 'Outside window',
+      pass: hotVmpOk
+    },
+    {
+      label: 'Standard Test Condition String Maximum Power Voltage (Vmp at STC)',
+      actual: `${calcs.stringVmpMax ?? '-'} V`,
+      limit: `${calcs.mpptVmpMin ?? '-'}-${calcs.mpptVmpMax ?? '-'} V (reference)`,
+      margin: 'STC (25 °C cells)',
+      pass: true
+    },
+    {
+      label: 'Maximum Power Point Tracker (MPPT) Operating Current',
+      actual: `${parseFloat(actualPvCurrentA.toFixed(1))} A`,
+      limit: `${maxPvCurrentA} A`,
+      margin: `${parseFloat(currentMarginA.toFixed(1))} A`,
+      pass: pvCurrentOk
+    },
+    {
+      label: 'Photovoltaic (PV) Array Power',
+      actual: `${Math.round(actualPvPowerW)} W`,
+      limit: `${maxPvPowerW} W`,
+      margin: `${Math.round(powerMarginW)} W`,
+      pass: pvPowerOk
+    }
+  ];
 
   const selectionJustifications = {
     inverter: [
-      { label: 'Continuous Load', value: `${continuousKw.toFixed(2)} kW within ${calcs.inverterSizeKva} kVA rating` },
-      { label: 'Peak Demand', value: `${peakKw.toFixed(2)} kW` },
+      {
+        label: 'Total Connected Load',
+        value: `${connectedKw.toFixed(2)} kW within ${calcs.inverterSizeKva} kilovolt-ampere (kVA) rating`
+      },
+      {
+        label: 'Peak Demand',
+        value: `${peakKw.toFixed(2)} kW — ${peakDemandDerivation}`
+      },
       {
         label: 'Surge Requirement',
         value: `${peakKw.toFixed(2)} kW peak demand validated against inverter surge capacity during selection`
       },
       {
         label: 'Battery Voltage Compatibility',
-        value: `${inputs.resolvedSystemVoltageV}V DC bus matched to selected inverter`
+        value: `${inputs.resolvedSystemVoltageV} V direct-current (DC) bus matched to selected inverter`
       },
       {
-        label: 'PV Voltage Compatibility',
-        value: `Cold Voc ${calcs.stringVocMax ?? '-'} V <= MPPT limit ${calcs.mpptVocLimit ?? '-'} V`
+        label: 'Photovoltaic (PV) Voltage Compatibility',
+        value: `Cold open-circuit voltage (Voc) ${calcs.stringVocMax ?? '-'} V ${
+          pvVoltageOk ? '<=' : '>'
+        } Maximum Power Point Tracker (MPPT) limit ${calcs.mpptVocLimit ?? '-'} V`
       },
       {
-        label: 'MPPT Current Compatibility',
-        value: `${actualPvCurrentA} A <= ${maxPvCurrentA} A inverter PV input`
+        label: 'Maximum Power Point Tracker (MPPT) Current Compatibility',
+        value: `${actualPvCurrentA.toFixed(1)} A ${pvCurrentOk ? '<=' : '>'} ${maxPvCurrentA} A inverter PV input${
+          pvCurrentOk ? '' : ' — FAIL'
+        }`
       },
-      { label: 'Future Expansion Margin', value: `~${futureExpansionPercent}% continuous headroom` }
+      {
+        label: 'Future Expansion Margin',
+        value: `~${futureExpansionPercent}% connected-load headroom on the inverter continuous rating`
+      }
     ],
     battery: [
       {
@@ -255,37 +393,51 @@ export function buildEngineeringReportMeta(
       },
       {
         label: 'Required Energy',
-        value: `${requiredBatt.toFixed(2)} kWh before efficiency / DoD / reserve`
+        value: `${requiredBatt.toFixed(2)} kilowatt-hours (kWh) before efficiency / Depth of Discharge (DoD) / reserve`
       },
       {
         label: 'Installed / Usable',
-        value: `${(calcs.batteryInstalledKwh || calcs.batteryCapacityKwh).toFixed(2)} kWh installed, ${usableBatt.toFixed(2)} kWh usable`
+        value: `${installedBattKwh.toFixed(2)} kWh installed, ${usableBatt.toFixed(2)} kWh usable`
       },
       {
-        label: 'Chemistry & DoD',
-        value: `${CHEMISTRY_LABELS[inputs.batteryType]} at ${Math.round((calcs.batteryDodUsed || 0.9) * 100)}% DoD`
+        label: 'Chemistry & Depth of Discharge (DoD)',
+        value: `${CHEMISTRY_LABELS[inputs.batteryType]} at ${Math.round((calcs.batteryDodUsed || 0.9) * 100)}% Depth of Discharge (DoD)`
       },
       {
-        label: 'Engineering Reserve',
-        value: reservePct > 0 ? `~${reservePct}% above minimum required energy` : 'Matched to minimum plus efficiency stack'
+        label: 'Installed Engineering Reserve',
+        value:
+          installedBatteryReservePercent > 0
+            ? `~${installedBatteryReservePercent}% above minimum required energy (installed capacity vs required)`
+            : 'Matched to minimum plus efficiency stack'
       },
       {
-        label: 'SKU / Configuration',
-        value: `${calcs.batteryProductModel || 'Commercial battery bank'} | ${calcs.batterySeriesCount ?? '-'}S x ${calcs.batteryParallelCount ?? '-'}P`
+        label: 'Usable Engineering Reserve',
+        value:
+          usableBatteryReservePercent > 0
+            ? `~${usableBatteryReservePercent}% above minimum required energy after Depth of Discharge (DoD) limit`
+            : 'Usable capacity is at or near the minimum required energy'
+      },
+      {
+        label: 'Product / Configuration',
+        value: `${calcs.batteryProductModel || 'Commercial battery bank'} | ${calcs.batterySeriesCount ?? '-'} in series × ${calcs.batteryParallelCount ?? '-'} in parallel`
       }
     ],
     pv: [
       {
         label: 'Daily Consumption',
-        value: `${(calcs.dailyEnergy / 1000).toFixed(2)} kWh`
+        value: `${(calcs.dailyEnergy / 1000).toFixed(2)} kilowatt-hours (kWh)`
       },
       {
         label: 'Minimum Array Target',
-        value: `${parseFloat(requiredArrayKwp.toFixed(2))} kWp from energy / (PSH x efficiency)`
+        value: `${parseFloat(requiredArrayKwp.toFixed(2))} kilowatt-peak (kWp) from energy / (Peak Sun Hours × efficiency)`
       },
       {
         label: 'Selected Array',
-        value: `${calcs.solarArrayKw} kWp (${calcs.panelQuantity} panels, ${calcs.panelConfiguration})`
+        value: `${calcs.solarArrayKw} kWp (${calcs.panelQuantity} panels × ${selectedPanelWattageWp} Wp, ${calcs.panelConfiguration})`
+      },
+      {
+        label: 'Panel Preference',
+        value: panelPreferenceNote
       },
       {
         label: 'Engineering Margin',
@@ -293,44 +445,60 @@ export function buildEngineeringReportMeta(
       },
       {
         label: 'String Electrical Fit',
-        value: `Voc ${calcs.stringVocMax ?? '-'} V / Vmp ${calcs.stringVmpHot ?? calcs.stringVmpMax ?? '-'} V within inverter MPPT limits`
+        value: `Cold Voc ${calcs.stringVocMax ?? '-'} V · Hot Vmp ${calcs.stringVmpHot ?? '-'} V · STC Vmp ${calcs.stringVmpMax ?? '-'} V within Maximum Power Point Tracker (MPPT) limits`
+      },
+      {
+        label: 'Maximum Power Point Tracker (MPPT) Mapping',
+        value: mpptMappingDescription
       },
       {
         label: 'Daily Net Production',
         value: `${calcs.estimatedDailyProductionKwh} kWh/day estimated`
       }
     ],
-    protection:
-      'Each protection device is sized from calculated continuous current, then multiplied by the applicable IEC/NEC safety factor and rounded up to the nearest standard rating.'
+    protection: protectionAdequacyOk
+      ? 'Each protection device is sized from calculated continuous current, then multiplied by the applicable International Electrotechnical Commission (IEC) / National Electrical Code (NEC) safety factor and rounded UP to the nearest standard rating that meets or exceeds the requirement.'
+      : `Protection adequacy FAIL: ${
+          protectionNotes.join(' ') ||
+          'One or more selected ratings are below the calculated requirement. Do not mark this design CERTIFIED until corrected.'
+        }`
   };
 
   const pvMarginNotes: string[] = [];
-  if (voltageMarginV > 0 && voltageMarginV < 15) {
+  if (!pvCurrentOk) {
     pvMarginNotes.push(
-      `Cold-weather Voc margin is only ${voltageMarginV.toFixed(1)} V below the inverter limit (${calcs.stringVocMax} V vs ${calcs.mpptVocLimit} V). This design is acceptable but should be verified for extremely cold installation environments.`
-    );
-  } else if (voltageMarginV >= 15) {
-    pvMarginNotes.push(
-      `Cold-weather Voc headroom of ${voltageMarginV.toFixed(1)} V provides comfortable margin to the inverter Voc limit.`
+      `FAIL: Maximum Power Point Tracker (MPPT) operating current ${actualPvCurrentA.toFixed(1)} A exceeds the inverter limit ${maxPvCurrentA} A. Reduce parallel strings per MPPT or select an inverter with a higher PV input current rating.`
     );
   }
-  if (currentMarginA > 0 && currentMarginA < 5) {
+  if (!protectionAdequacyOk) {
+    pvMarginNotes.push(...(protectionNotes.length ? protectionNotes : [
+      'FAIL: Protection device rating is below the calculated requirement.'
+    ]));
+  }
+  if (pvVoltageOk && voltageMarginV > 0 && voltageMarginV < 15) {
     pvMarginNotes.push(
-      `MPPT current margin is only ${currentMarginA.toFixed(1)} A. Do not add parallel strings without re-validating inverter PV current limits.`
+      `Cold-weather open-circuit voltage (Voc) margin is only ${voltageMarginV.toFixed(1)} V below the inverter limit (${calcs.stringVocMax} V vs ${calcs.mpptVocLimit} V). Acceptable, but verify for extremely cold installation environments.`
     );
-  } else if (currentMarginA >= 5) {
+  } else if (pvVoltageOk && voltageMarginV >= 15) {
     pvMarginNotes.push(
-      `MPPT current headroom of ${currentMarginA.toFixed(1)} A is adequate for the published string layout.`
+      `Cold-weather open-circuit voltage (Voc) headroom of ${voltageMarginV.toFixed(1)} V provides comfortable margin to the inverter Voc limit.`
     );
   }
-  if (
-    (calcs.stringVmpHot ?? calcs.stringVmpMax ?? 0) >= (calcs.mpptVmpMin || 0) &&
-    (calcs.stringVmpHot ?? calcs.stringVmpMax ?? 0) <= (calcs.mpptVmpMax || Infinity)
-  ) {
+  if (pvCurrentOk && currentMarginA > 0 && currentMarginA < 5) {
     pvMarginNotes.push(
-      `String Vmp operates within the inverter MPPT window (${calcs.mpptVmpMin}-${calcs.mpptVmpMax} V).`
+      `Maximum Power Point Tracker (MPPT) current margin is only ${currentMarginA.toFixed(1)} A. Do not add parallel strings without re-validating inverter PV current limits.`
+    );
+  } else if (pvCurrentOk && currentMarginA >= 5) {
+    pvMarginNotes.push(
+      `Maximum Power Point Tracker (MPPT) current headroom of ${currentMarginA.toFixed(1)} A is adequate for the published string layout.`
     );
   }
+  if (hotVmpOk) {
+    pvMarginNotes.push(
+      `Hot-weather string maximum power voltage (Vmp ≈ ${calcs.stringVmpHot ?? calcs.stringVmpMax} V at ${SYSTEM_STANDARDS.maxCellTempC} °C cell temperature) operates within the inverter Maximum Power Point Tracker (MPPT) window (${calcs.mpptVmpMin}-${calcs.mpptVmpMax} V). Standard Test Condition (STC) string Vmp is ${calcs.stringVmpMax ?? '-'} V (8 × module Vmp at 25 °C) — use hot Vmp for tracking-window checks and STC Vmp for reference only.`
+    );
+  }
+  pvMarginNotes.push(mpptMappingDescription);
 
   return {
     chemistryLabel: CHEMISTRY_LABELS[inputs.batteryType],
@@ -350,7 +518,7 @@ export function buildEngineeringReportMeta(
     requiredArrayKwp: parseFloat(requiredArrayKwp.toFixed(2)),
     engineeringMarginPercent,
     confidenceScore,
-    confidenceReasons: confidenceReasons.slice(0, 4),
+    confidenceReasons: confidenceReasons.slice(0, 6),
     passport,
     overallStatus,
     voltageMarginV: parseFloat(voltageMarginV.toFixed(1)),
@@ -360,8 +528,18 @@ export function buildEngineeringReportMeta(
     actualPvPowerW: Math.round(actualPvPowerW),
     maxPvCurrentA,
     maxPvPowerW,
+    pvCurrentOk,
+    protectionAdequacyOk,
+    peakDemandDerivation,
+    mpptMappingDescription,
+    installedBatteryReservePercent,
+    usableBatteryReservePercent,
+    selectedPanelWattageWp,
+    preferredPanelWattageWp,
+    panelPreferenceNote,
     selectionJustifications,
-    pvMarginNotes
+    pvMarginNotes,
+    stringElectricalChecks
   };
 }
 

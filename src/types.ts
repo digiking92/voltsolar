@@ -29,6 +29,9 @@ export interface Project {
   createdAt: string;
   appliances: ProjectAppliance[];
   calculations?: Calculations;
+  /** Optional UI fields derived from calculations._wizardMeta */
+  status?: 'draft' | 'complete';
+  wizardStep?: number;
 }
 
 export interface Appliance {
@@ -126,6 +129,12 @@ export interface Calculations {
   maxPvPowerW?: number;
   seriesCount?: number;
   parallelCount?: number;
+  /** Number of Maximum Power Point Tracker (MPPT) inputs on the selected inverter */
+  numMppts?: number;
+  /** Parallel PV strings assigned to each Maximum Power Point Tracker (MPPT) */
+  stringsPerMppt?: number;
+  /** Module wattage actually selected by the solver (may differ from preferred) */
+  selectedPanelWattageWp?: number;
   targetPvKw?: number;
   panelSizingCompatibilityOk?: boolean;
   panelSizingCompatibilityWarning?: string;
@@ -146,6 +155,9 @@ export interface Calculations {
     acRcdBreaker?: string;
     earthElectrode?: string;
     distributionBoard?: string;
+    /** False when any current-based device was selected below its calculated requirement. */
+    protectionAdequacyOk?: boolean;
+    protectionAdequacyNotes?: string[];
     deviceDetails?: {
       device: string;
       calculatedCurrentA: number;

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Search, FolderHeart, Plus, Copy, Trash2, Edit, ExternalLink } from 'lucide-react';
+import { Search, FolderHeart, Plus, Copy, Trash2, Edit } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Project } from '../../types';
+import { getWizardMeta, hasCompletedSizing, projectStatusLabel } from '../../lib/projectDraft';
 
 interface ProjectsListPageProps {
   onEditProject: (project: Project) => void;
@@ -123,7 +124,18 @@ export const ProjectsListPage: React.FC<ProjectsListPageProps> = ({ onEditProjec
                       <div className="font-bold text-slate-800 hover:text-[#156DB7] cursor-pointer" onClick={() => onEditProject(p)}>
                         {p.projectName}
                       </div>
-                      <div className="text-[10px] text-slate-400 mt-0.5 capitalize">{p.projectType} layout</div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] text-slate-400 capitalize">{p.projectType} layout</span>
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            getWizardMeta(p).status === 'draft'
+                              ? 'bg-amber-50 text-amber-700'
+                              : 'bg-[#69BD45]/10 text-[#5AAB3C]'
+                          }`}
+                        >
+                          {projectStatusLabel(p)}
+                        </span>
+                      </div>
                     </td>
                     <td className="px-6 py-4">
                       <div className="font-semibold text-slate-700">{p.clientName}</div>
@@ -132,7 +144,7 @@ export const ProjectsListPage: React.FC<ProjectsListPageProps> = ({ onEditProjec
                     <td className="px-6 py-4 font-medium text-slate-600">{p.location}</td>
                     <td className="px-6 py-4 font-medium text-slate-400">{formatDate(p.createdAt)}</td>
                     <td className="px-6 py-4">
-                      {p.calculations ? (
+                      {hasCompletedSizing(p.calculations) && p.calculations ? (
                         <div className="space-y-0.5">
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#69BD45]/10 text-[#5AAB3C]">
                             {p.calculations.solarArrayKw} kWp PV
@@ -142,7 +154,9 @@ export const ProjectsListPage: React.FC<ProjectsListPageProps> = ({ onEditProjec
                           </div>
                         </div>
                       ) : (
-                        <span className="text-slate-400 italic text-[10px]">Wizard incomplete</span>
+                        <span className="text-amber-700 italic text-[10px] font-semibold">
+                          {projectStatusLabel(p)} — continue wizard
+                        </span>
                       )}
                     </td>
                     <td className="px-6 py-4 text-right">
