@@ -110,6 +110,8 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
   // Step 6: Inverter
   const [inverterType, setInverterType] = useState<InverterType>('auto');
   const [datasheetDrawerOpen, setDatasheetDrawerOpen] = useState(false);
+  const [showInverterCalcDetails, setShowInverterCalcDetails] = useState(false);
+  const [showInverterChecks, setShowInverterChecks] = useState(false);
   const [inverterDatasheetSelection, setInverterDatasheetSelection] =
     useState<InverterDatasheetSelection>({ mode: 'auto' });
 
@@ -1756,7 +1758,7 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     </div>
                   ) : null}
                   
-                  <div className="space-y-1">
+                  <div className="space-y-3">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                       {activeCalcs.catalogMatchMode === 'generic'
                         ? 'Engineering size (no catalog SKU)'
@@ -1764,43 +1766,49 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                           ? 'Datasheet-matched capacity'
                           : 'Catalog-matched capacity'}
                     </span>
-                    <h3 className="text-3xl font-extrabold text-slate-900">{activeCalcs.inverterSizeKva.toFixed(1)} kVA / kW</h3>
-                    {activeCalcs.inverterModelRecommended ? (
-                      <p className="text-xs font-semibold text-slate-700 pt-1">{activeCalcs.inverterModelRecommended}</p>
-                    ) : null}
-                    {designAudience === 'engineering' ? (
-                      <button
-                        type="button"
-                        id="open-inverter-datasheet"
-                        onClick={() => setDatasheetDrawerOpen(true)}
-                        className="mt-2 text-[11px] font-bold text-[#156DB7] hover:underline"
-                      >
-                        View catalogue datasheet →
-                      </button>
-                    ) : (
-                      <p className="text-[10px] text-slate-400 mt-2">
-                        Switch to Full engineering design to inspect catalogue datasheets.
+                    <h3 className="text-3xl font-extrabold text-slate-900">
+                      {activeCalcs.inverterSizeKva.toFixed(1)} kVA / kW
+                    </h3>
+
+                    {/* Clickable recommended brand — opens catalogue datasheet */}
+                    <button
+                      type="button"
+                      id="open-inverter-datasheet"
+                      onClick={() => setDatasheetDrawerOpen(true)}
+                      className="w-full text-left p-3.5 rounded-xl border-2 border-[#156DB7]/35 bg-white hover:bg-[#F0F7FC] hover:border-[#156DB7] transition-colors group"
+                    >
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-[#156DB7]">
+                        Recommended brand — click for datasheet
                       </p>
-                    )}
+                      <p className="text-sm font-extrabold text-slate-900 mt-1 group-hover:text-[#156DB7]">
+                        {activeCalcs.inverterModelRecommended || 'No model selected yet'}
+                      </p>
+                      <p className="text-[11px] font-semibold text-[#156DB7] mt-2">
+                        View Voc / MPPT / battery limits →
+                      </p>
+                    </button>
+
                     {activeCalcs.catalogMatchMode === 'generic' ? (
-                      <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
-                        Planning size only — open the datasheet panel to pick a catalogue SKU or enter custom limits.
+                      <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                        Planning size only — open the datasheet panel to pick a catalogue SKU
+                        {designAudience === 'engineering' ? ' or enter custom limits' : ''}.
                       </p>
                     ) : null}
                     {activeCalcs.catalogMatchMode === 'datasheet' ? (
-                      <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 mt-2">
+                      <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
                         Custom datasheet active — Voc/MPPT/protection use your entered limits.
                       </p>
                     ) : null}
                     {inverterDatasheetSelection.mode === 'catalogue' &&
                     inverterDatasheetSelection.preferredCatalog ? (
-                      <p className="text-[11px] text-[#0F5288] bg-[#F0F7FC] border border-[#156DB7]/20 rounded-lg px-2.5 py-1.5 mt-2">
+                      <p className="text-[11px] text-[#0F5288] bg-[#F0F7FC] border border-[#156DB7]/20 rounded-lg px-2.5 py-1.5">
                         Catalogue override: {inverterDatasheetSelection.preferredCatalog.brand}{' '}
                         {inverterDatasheetSelection.preferredCatalog.model}
                       </p>
                     ) : null}
                   </div>
 
+                  {/* Collapsed by default — keeps the step short */}
                   {(() => {
                     const designConnectedW =
                       activeCalcs.inverterDesignConnectedLoadW ?? activeCalcs.connectedLoad ?? 0;
@@ -1823,50 +1831,48 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
                     return (
                       <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
-                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide px-3.5 py-2 border-b border-slate-100">
-                          How this capacity was calculated
-                        </p>
-                        <ol className="divide-y divide-slate-100 text-xs text-slate-800">
-                          <li className="px-3.5 py-2.5 flex justify-between gap-3">
-                            <span className="text-slate-600">
-                              1. Design connected load
-                              {activeCalcs.operatingMode === 'hybrid_essentials'
-                                ? ' (Critical + Essential + Managed)'
-                                : ' (all appliances)'}
-                            </span>
-                            <span className="font-bold shrink-0">{rawKw.toFixed(2)} kW</span>
-                          </li>
-                          <li className="px-3.5 py-2.5 flex justify-between gap-3">
-                            <span className="text-slate-600">
-                              2. Apply continuous safety factor (× 1.25)
-                            </span>
-                            <span className="font-bold shrink-0">
-                              {rawKw.toFixed(2)} × 1.25 = {withSafetyKw.toFixed(2)} kVA
-                            </span>
-                          </li>
-                          <li className="px-3.5 py-2.5 flex justify-between gap-3">
-                            <span className="text-slate-600">
-                              3. Peak demand (diversity + motor start surplus)
-                            </span>
-                            <span className="font-bold shrink-0">{peakKw.toFixed(2)} kW</span>
-                          </li>
-                          <li className="px-3.5 py-2.5 flex justify-between gap-3">
-                            <span className="text-slate-600">
-                              4. Minimum continuous target used for matching
-                            </span>
-                            <span className="font-bold text-[#156DB7] shrink-0">
-                              {minKva.toFixed(2)} kVA
-                            </span>
-                          </li>
-                          <li className="px-3.5 py-2.5 flex justify-between gap-3">
-                            <span className="text-slate-600">
-                              5. Selected commercial inverter (must also cover peak surge)
-                            </span>
-                            <span className="font-bold text-[#69BD45] shrink-0">
-                              {activeCalcs.inverterSizeKva.toFixed(1)} kVA
-                            </span>
-                          </li>
-                        </ol>
+                        <button
+                          type="button"
+                          onClick={() => setShowInverterCalcDetails(v => !v)}
+                          className="w-full flex items-center justify-between px-3.5 py-2.5 text-left hover:bg-slate-50"
+                        >
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+                            How this capacity was calculated
+                          </span>
+                          <ChevronDown
+                            className={`w-4 h-4 text-slate-400 transition-transform ${
+                              showInverterCalcDetails ? 'rotate-180' : ''
+                            }`}
+                          />
+                        </button>
+                        {showInverterCalcDetails ? (
+                          <ol className="divide-y divide-slate-100 text-xs text-slate-800 border-t border-slate-100">
+                            <li className="px-3.5 py-2.5 flex justify-between gap-3">
+                              <span className="text-slate-600">1. Design connected load</span>
+                              <span className="font-bold shrink-0">{rawKw.toFixed(2)} kW</span>
+                            </li>
+                            <li className="px-3.5 py-2.5 flex justify-between gap-3">
+                              <span className="text-slate-600">2. Continuous safety (× 1.25)</span>
+                              <span className="font-bold shrink-0">{withSafetyKw.toFixed(2)} kVA</span>
+                            </li>
+                            <li className="px-3.5 py-2.5 flex justify-between gap-3">
+                              <span className="text-slate-600">3. Peak demand</span>
+                              <span className="font-bold shrink-0">{peakKw.toFixed(2)} kW</span>
+                            </li>
+                            <li className="px-3.5 py-2.5 flex justify-between gap-3">
+                              <span className="text-slate-600">4. Matching target</span>
+                              <span className="font-bold text-[#156DB7] shrink-0">
+                                {minKva.toFixed(2)} kVA
+                              </span>
+                            </li>
+                            <li className="px-3.5 py-2.5 flex justify-between gap-3">
+                              <span className="text-slate-600">5. Selected inverter</span>
+                              <span className="font-bold text-[#69BD45] shrink-0">
+                                {activeCalcs.inverterSizeKva.toFixed(1)} kVA
+                              </span>
+                            </li>
+                          </ol>
+                        ) : null}
                       </div>
                     );
                   })()}
@@ -1876,62 +1882,65 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     if (!parsed.headline && parsed.items.length === 0) return null;
                     return (
                       <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
-                        {parsed.headline ? (
-                          <p className="text-xs font-semibold text-slate-800 px-3.5 py-2.5 border-b border-slate-100">
-                            {parsed.headline.replace(/\.$/, '')}
-                          </p>
+                        <button
+                          type="button"
+                          onClick={() => setShowInverterChecks(v => !v)}
+                          className="w-full flex items-center justify-between px-3.5 py-2.5 text-left hover:bg-slate-50"
+                        >
+                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+                            Compatibility checks ({parsed.items.length || 'details'})
+                          </span>
+                          <ChevronDown
+                            className={`w-4 h-4 text-slate-400 transition-transform ${
+                              showInverterChecks ? 'rotate-180' : ''
+                            }`}
+                          />
+                        </button>
+                        {showInverterChecks ? (
+                          <div className="border-t border-slate-100">
+                            {parsed.headline ? (
+                              <p className="text-xs font-semibold text-slate-800 px-3.5 py-2.5 border-b border-slate-100">
+                                {parsed.headline.replace(/\.$/, '')}
+                              </p>
+                            ) : null}
+                            <ul className="divide-y divide-slate-100">
+                              {parsed.items.map(item => (
+                                <li
+                                  key={`${item.label}-${item.value}`}
+                                  className="px-3.5 py-2.5 flex flex-col gap-0.5"
+                                >
+                                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+                                    {item.label}
+                                  </span>
+                                  <span className="text-xs text-slate-800 leading-snug">
+                                    {item.value}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
                         ) : null}
-                        <ul className="divide-y divide-slate-100">
-                          {parsed.items.map(item => (
-                            <li
-                              key={`${item.label}-${item.value}`}
-                              className="px-3.5 py-2.5 flex flex-col gap-0.5"
-                            >
-                              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">
-                                {item.label}
-                              </span>
-                              <span className="text-xs text-slate-800 leading-snug">{item.value}</span>
-                            </li>
-                          ))}
-                        </ul>
                       </div>
                     );
                   })()}
                 </div>
 
-                <div className="p-4 bg-amber-50 rounded-xl border border-amber-100/50 flex items-start space-x-3 text-[10px] text-amber-800 leading-relaxed">
-                  <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  <span>
-                    The <span className="font-semibold">1.25× factor</span> is applied to the
-                    design <span className="font-semibold">connected load</span> (step 1 → 2 above)
-                    so the inverter has continuous headroom under heat. Peak demand is checked
-                    separately against the inverter’s surge capacity — it is not multiplied by 1.25.
-                  </span>
-                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed px-1">
+                  Continuous rating uses a 1.25× factor on design connected load. Peak demand is
+                  checked against surge capacity only.
+                </p>
               </div>
             </div>
 
-            {designAudience === 'engineering' ? (
-              <p className="mt-4 text-[11px] text-slate-500">
-                Need datasheet details?{' '}
-                <button
-                  type="button"
-                  onClick={() => setDatasheetDrawerOpen(true)}
-                  className="font-bold text-[#156DB7] hover:underline"
-                >
-                  Open inverter datasheet panel
-                </button>
-              </p>
-            ) : null}
-
             <InverterDatasheetDrawer
-              open={datasheetDrawerOpen && designAudience === 'engineering'}
+              open={datasheetDrawerOpen}
               onClose={() => setDatasheetDrawerOpen(false)}
               catalogMarket={catalogMarket}
               recommendedDisplayName={activeCalcs.inverterModelRecommended}
               recommendedBrand={activeCalcs.inverterBrandRecommended}
               recommendedModel={activeCalcs.inverterModelNameRecommended}
               catalogMatchMode={activeCalcs.catalogMatchMode}
+              allowEdit={designAudience === 'engineering'}
               selection={inverterDatasheetSelection}
               onApply={sel => {
                 if (sel.mode === 'custom' && sel.customInverter) {

@@ -25,6 +25,8 @@ interface InverterDatasheetDrawerProps {
   recommendedBrand?: string;
   recommendedModel?: string;
   catalogMatchMode?: string;
+  /** When false, only the recommended catalogue datasheet is shown (no pick/custom). */
+  allowEdit?: boolean;
   /** Current engineer selection (catalogue pick or custom). */
   selection: InverterDatasheetSelection;
   onApply: (selection: InverterDatasheetSelection) => void;
@@ -38,6 +40,7 @@ export const InverterDatasheetDrawer: React.FC<InverterDatasheetDrawerProps> = (
   recommendedBrand,
   recommendedModel,
   catalogMatchMode,
+  allowEdit = true,
   selection,
   onApply
 }) => {
@@ -84,6 +87,10 @@ export const InverterDatasheetDrawer: React.FC<InverterDatasheetDrawerProps> = (
 
   useEffect(() => {
     if (!open) return;
+    if (!allowEdit) {
+      setTab('catalogue');
+      return;
+    }
     if (selection.mode === 'custom') {
       setTab('custom');
       const c = selection.customInverter;
@@ -112,7 +119,7 @@ export const InverterDatasheetDrawer: React.FC<InverterDatasheetDrawerProps> = (
       if (recommendedBrand) setPickBrand(recommendedBrand);
       if (recommendedModel) setPickModel(recommendedModel);
     }
-  }, [open, selection, recommendedBrand, recommendedModel]);
+  }, [open, selection, recommendedBrand, recommendedModel, allowEdit]);
 
   if (!open) return null;
 
@@ -169,32 +176,40 @@ export const InverterDatasheetDrawer: React.FC<InverterDatasheetDrawerProps> = (
           </button>
         </div>
 
-        <div className="flex gap-1 px-4 pt-3 border-b border-slate-100">
-          {(
-            [
-              { id: 'catalogue' as const, label: 'Recommended', icon: BookOpen },
-              { id: 'pick' as const, label: 'Pick catalogue', icon: Package },
-              { id: 'custom' as const, label: 'Custom', icon: PenLine }
-            ] as const
-          ).map(t => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className={`flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-2.5 text-[11px] font-bold rounded-t-lg border-b-2 transition-colors ${
-                tab === t.id
-                  ? 'border-[#156DB7] text-[#156DB7] bg-slate-50'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              <t.icon className="w-3.5 h-3.5" />
-              {t.label}
-            </button>
-          ))}
-        </div>
+        {allowEdit ? (
+          <div className="flex gap-1 px-4 pt-3 border-b border-slate-100">
+            {(
+              [
+                { id: 'catalogue' as const, label: 'Recommended', icon: BookOpen },
+                { id: 'pick' as const, label: 'Pick catalogue', icon: Package },
+                { id: 'custom' as const, label: 'Custom', icon: PenLine }
+              ] as const
+            ).map(t => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-2.5 text-[11px] font-bold rounded-t-lg border-b-2 transition-colors ${
+                  tab === t.id
+                    ? 'border-[#156DB7] text-[#156DB7] bg-slate-50'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <t.icon className="w-3.5 h-3.5" />
+                {t.label}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="px-5 py-2.5 border-b border-slate-100 bg-slate-50">
+            <p className="text-[11px] font-semibold text-slate-600">
+              Catalogue datasheet for the recommended inverter
+            </p>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-          {tab === 'catalogue' && (
+          {(tab === 'catalogue' || !allowEdit) && (
             <>
               {catalogMatchMode === 'generic' ? (
                 <p className="text-[12px] text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 leading-relaxed">
@@ -228,7 +243,7 @@ export const InverterDatasheetDrawer: React.FC<InverterDatasheetDrawerProps> = (
             </>
           )}
 
-          {tab === 'pick' && (
+          {allowEdit && tab === 'pick' && (
             <div className="space-y-3">
               <p className="text-[11px] text-slate-500 leading-relaxed">
                 Choose another brand/model from the company catalogue for this market. Datasheet
@@ -281,7 +296,7 @@ export const InverterDatasheetDrawer: React.FC<InverterDatasheetDrawerProps> = (
             </div>
           )}
 
-          {tab === 'custom' && (
+          {allowEdit && tab === 'custom' && (
             <div className="space-y-3">
               <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 leading-relaxed">
                 Advanced: only when the unit is not in the company catalogue. Values must match the
@@ -330,7 +345,7 @@ export const InverterDatasheetDrawer: React.FC<InverterDatasheetDrawerProps> = (
         </div>
 
         <div className="px-5 py-4 border-t border-slate-200 flex flex-col sm:flex-row gap-2">
-          {tab === 'catalogue' && recommendedSku ? (
+          {allowEdit && tab === 'catalogue' && recommendedSku ? (
             <button
               type="button"
               className="flex-1 px-4 py-2.5 bg-[#156DB7] hover:bg-[#0F5288] text-white text-xs font-bold rounded-xl"
@@ -346,7 +361,7 @@ export const InverterDatasheetDrawer: React.FC<InverterDatasheetDrawerProps> = (
               Use recommended catalogue datasheet
             </button>
           ) : null}
-          {tab === 'pick' ? (
+          {allowEdit && tab === 'pick' ? (
             <button
               type="button"
               disabled={!pickedSku}
@@ -364,7 +379,7 @@ export const InverterDatasheetDrawer: React.FC<InverterDatasheetDrawerProps> = (
               Use selected catalogue SKU
             </button>
           ) : null}
-          {tab === 'custom' ? (
+          {allowEdit && tab === 'custom' ? (
             <button
               type="button"
               disabled={!buildCustom()}
@@ -386,9 +401,11 @@ export const InverterDatasheetDrawer: React.FC<InverterDatasheetDrawerProps> = (
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2.5 border border-slate-200 text-slate-600 text-xs font-semibold rounded-xl"
+            className={`px-4 py-2.5 border border-slate-200 text-slate-600 text-xs font-semibold rounded-xl ${
+              !allowEdit ? 'flex-1 bg-[#156DB7] text-white border-[#156DB7] hover:bg-[#0F5288]' : ''
+            }`}
           >
-            Close
+            {allowEdit ? 'Close' : 'Done'}
           </button>
         </div>
       </div>
