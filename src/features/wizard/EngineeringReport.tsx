@@ -438,9 +438,15 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             <div className="w-9 h-9 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-500">
               <Sun className="w-4 h-4" />
             </div>
-            <span className="text-[11px] font-semibold text-slate-600 tracking-wide block">PV Array</span>
+            <span className="text-[11px] font-semibold text-slate-600 tracking-wide block">PV Array (installed)</span>
             <h4 className="text-xl font-extrabold text-slate-800">{calcs.solarArrayKw} kWp</h4>
             <p className="text-sm text-slate-600">{calcs.panelQuantity} × {panelWpActual} Wp · {calcs.panelConfiguration}</p>
+            {meta.requiredArrayKwp > 0 ? (
+              <p className="text-xs text-slate-500">
+                Required target {meta.requiredArrayKwp} kWp
+                {meta.engineeringMarginPercent > 0 ? ` · ~${meta.engineeringMarginPercent}% margin` : ''}
+              </p>
+            ) : null}
             <p className="text-sm font-bold text-[#69BD45]">{calcs.estimatedDailyProductionKwh} kWh/day net</p>
           </div>
           <div className="p-5 border border-slate-200/60 rounded-2xl space-y-3">

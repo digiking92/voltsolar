@@ -481,6 +481,16 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
   const activeCalcs = runActiveCalculations();
 
+  // PV array: required (load/PSH/efficiency) vs installed (whole panels × module Wp)
+  const pvRequiredArrayKwp =
+    activeCalcs.requiredArrayKwp ?? activeCalcs.engineeringRequiredArrayKwp ?? null;
+  const pvSelectedModuleWp = activeCalcs.selectedPanelWattageWp ?? panelSize;
+  const pvInstalledArrayKwp = activeCalcs.solarArrayKw ?? 0;
+  const pvArrayMarginPct =
+    pvRequiredArrayKwp != null && pvRequiredArrayKwp > 0
+      ? Math.max(0, Math.round((pvInstalledArrayKwp / pvRequiredArrayKwp - 1) * 100))
+      : null;
+
   const buildProjectPayload = (status: ProjectStatus, step: number) => {
     const actualBackupHours = isCustomHours ? parseInt(customHours, 10) || 8 : backupHours;
     const liveCalcs = runActiveCalculations();
@@ -2015,19 +2025,38 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                 </div>
               </div>
 
-              {/* Instant Output calculations summary */}
+              {/* Instant Output — required target vs installed array */}
               <div className="space-y-6">
                 <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 space-y-4">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Calculated Grid Architecture</span>
-                  
+
+                  <div className="rounded-xl border border-slate-200/80 bg-white p-3.5 space-y-1">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-[10px] text-slate-400">Required array (from load)</span>
+                      <span className="text-sm font-bold text-slate-700 tabular-nums">
+                        {pvRequiredArrayKwp != null ? `${pvRequiredArrayKwp} kWp` : '—'}
+                      </span>
+                    </div>
+                    <p className="text-[9px] text-slate-400 leading-snug">
+                      Fixed by daily energy, peak sun hours, and system losses — not by panel wattage.
+                    </p>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <span className="text-[10px] text-slate-400">Total Array Size</span>
-                      <h4 className="text-xl font-bold text-slate-800 mt-0.5">{activeCalcs.solarArrayKw} kWp</h4>
+                      <span className="text-[10px] text-slate-400">Installed Array Size</span>
+                      <h4 className="text-xl font-bold text-slate-800 mt-0.5 tabular-nums">{pvInstalledArrayKwp} kWp</h4>
+                      {pvArrayMarginPct != null ? (
+                        <p className="text-[9px] text-[#156DB7] font-semibold mt-0.5">~{pvArrayMarginPct}% above required</p>
+                      ) : null}
                     </div>
                     <div>
                       <span className="text-[10px] text-slate-400">Panel Quantity</span>
                       <h4 className="text-xl font-bold text-slate-800 mt-0.5">{activeCalcs.panelQuantity} Panels</h4>
+                      <p className="text-[9px] text-slate-400 mt-0.5">
+                        {activeCalcs.panelQuantity} × {pvSelectedModuleWp} Wp
+                        {pvSelectedModuleWp !== panelSize ? ` (fit ${pvSelectedModuleWp} Wp)` : ''}
+                      </p>
                     </div>
                   </div>
 
@@ -2043,7 +2072,9 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     <p className="text-sm font-bold text-[#69BD45]">
                       {activeCalcs.estimatedDailyProductionKwh} kWh / day
                     </p>
-                    <p className="text-[9px] text-slate-400">Based on a localized standard 4.5 Peak Sun Hours metric.</p>
+                    <p className="text-[9px] text-slate-400">
+                      From the installed array · {activeCalcs.peakSunHoursUsed ?? 4.5} peak sun hours.
+                    </p>
                   </div>
                 </div>
               </div>
