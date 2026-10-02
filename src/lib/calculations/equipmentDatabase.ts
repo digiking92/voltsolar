@@ -1,3 +1,7 @@
+import type { CatalogMarketId } from './catalogMarkets';
+import { inverterInMarket } from './catalogMarkets';
+import { EXTRA_INVERTERS, EXTRA_PANELS } from './catalogExtras';
+
 export interface PanelSpecs {
   brand: string;
   model: string;
@@ -21,10 +25,21 @@ export interface InverterSpecs {
   mpptVocLimit: number;
   mpptVmpMin: number;
   mpptVmpMax: number;
-  maxPvCurrent: number; // A per MPPT tracker
+  /** Highest / primary MPPT continuous current (A). Prefer mpptInputCurrentsA when asymmetric. */
+  maxPvCurrent: number;
   maxPvPower: number; // W total PV input
   numMppts: number;
   maxStringsPerMppt: number;
+  /**
+   * Per-MPPT continuous PV input current limits (A), e.g. Deye 12K 3φ = [26, 13].
+   * When omitted, every tracker uses maxPvCurrent.
+   */
+  mpptInputCurrentsA?: number[];
+  /**
+   * Per-MPPT max parallel strings, e.g. Deye 12K 3φ = [2, 1].
+   * When omitted, every tracker uses maxStringsPerMppt.
+   */
+  mpptMaxStrings?: number[];
   efficiency: number;
   maxBatteryChargeCurrentA: number;
   maxBatteryDischargeCurrentA: number;
@@ -32,6 +47,50 @@ export interface InverterSpecs {
   topology: 'hybrid' | 'off_grid' | 'grid_tie';
   /** AC output phases — drives AC current / breaker / cable math */
   phases: 1 | 3;
+  /** Market packs this SKU belongs to. Omit = available in all markets. */
+  regions?: CatalogMarketId[];
+}
+
+/** User-entered datasheet fields (partial OK — gaps filled from engineering defaults). */
+export type DatasheetInverterInput = {
+  brand?: string;
+  model?: string;
+  sizeKva: number;
+  voltageV: number;
+  topology?: 'hybrid' | 'off_grid';
+  mpptVocLimit?: number;
+  mpptVmpMin?: number;
+  mpptVmpMax?: number;
+  maxPvCurrent?: number;
+  maxPvPower?: number;
+  numMppts?: number;
+  maxStringsPerMppt?: number;
+  efficiency?: number;
+  maxBatteryChargeCurrentA?: number;
+  maxBatteryDischargeCurrentA?: number;
+  surgeFactor?: number;
+  phases?: 1 | 3;
+};
+
+export type MpptChannel = { currentA: number; maxStrings: number };
+
+/** Resolve per-tracker current and string limits (supports asymmetric MPPTs). */
+export function getMpptChannels(inv: InverterSpecs): MpptChannel[] {
+  const n = Math.max(1, inv.numMppts || 1);
+  const currents = inv.mpptInputCurrentsA;
+  const strings = inv.mpptMaxStrings;
+  return Array.from({ length: n }, (_, i) => ({
+    currentA: currents?.[i] ?? currents?.[currents.length - 1] ?? inv.maxPvCurrent,
+    maxStrings: strings?.[i] ?? strings?.[strings.length - 1] ?? inv.maxStringsPerMppt
+  }));
+}
+
+export function formatMpptCurrentLimits(inv: InverterSpecs): string {
+  const channels = getMpptChannels(inv);
+  if (channels.length <= 1) return `${channels[0]?.currentA ?? inv.maxPvCurrent}`;
+  const allSame = channels.every(c => c.currentA === channels[0].currentA);
+  if (allSame) return `${channels[0].currentA}`;
+  return channels.map(c => c.currentA).join('+');
 }
 
 export interface BatterySpecs {
@@ -98,11 +157,35 @@ export const SOLAR_PANELS: PanelSpecs[] = [
   }
 ];
 
+/** Canonical mono module I-V for common wattages (avoids inflated Imp from scaling 575 W Neo cells). */
+const GENERIC_PANEL_IV: Record<
+  number,
+  Pick<PanelSpecs, 'voc' | 'vmp' | 'isc' | 'imp' | 'tempCoeffVoc' | 'tempCoeffVmp' | 'maxSeriesFuseA'>
+> = {
+  300: { voc: 34.0, vmp: 28.5, isc: 11.2, imp: 10.53, tempCoeffVoc: -0.30, tempCoeffVmp: -0.34, maxSeriesFuseA: 20 },
+  400: { voc: 37.2, vmp: 31.0, isc: 13.6, imp: 12.9, tempCoeffVoc: -0.30, tempCoeffVmp: -0.34, maxSeriesFuseA: 25 },
+  450: { voc: 41.0, vmp: 34.2, isc: 13.8, imp: 13.15, tempCoeffVoc: -0.29, tempCoeffVmp: -0.33, maxSeriesFuseA: 25 },
+  550: { voc: 49.8, vmp: 41.3, isc: 13.99, imp: 13.25, tempCoeffVoc: -0.28, tempCoeffVmp: -0.32, maxSeriesFuseA: 25 },
+  600: { voc: 54.2, vmp: 45.3, isc: 14.1, imp: 13.25, tempCoeffVoc: -0.28, tempCoeffVmp: -0.32, maxSeriesFuseA: 25 }
+};
+
 export function getPanelFromDb(panelSizeW: number): PanelSpecs {
-  const found = SOLAR_PANELS.find(p => p.sizeW === panelSizeW);
+  const all = [...SOLAR_PANELS, ...EXTRA_PANELS];
+  const found = all.find(p => p.sizeW === panelSizeW);
   if (found) return found;
 
-  const closest = SOLAR_PANELS.reduce((prev, curr) =>
+  const generic = GENERIC_PANEL_IV[panelSizeW];
+  if (generic) {
+    return {
+      brand: 'Generic Solar',
+      model: `Standard Mono-Si ${panelSizeW}W`,
+      sizeW: panelSizeW,
+      ...generic,
+      maxSystemVoltageV: 1500
+    };
+  }
+
+  const closest = all.reduce((prev, curr) =>
     Math.abs(curr.sizeW - panelSizeW) < Math.abs(prev.sizeW - panelSizeW) ? curr : prev
   );
 
@@ -123,10 +206,55 @@ export function getPanelFromDb(panelSizeW: number): PanelSpecs {
   };
 }
 
+export function getAllPanels(): PanelSpecs[] {
+  const byKey = new Map<string, PanelSpecs>();
+  for (const p of [...SOLAR_PANELS, ...EXTRA_PANELS]) {
+    byKey.set(`${p.brand}|${p.model}|${p.sizeW}`, p);
+  }
+  return Array.from(byKey.values());
+}
+
 export function getCandidatePanels(preferredSizeW: number): PanelSpecs[] {
   const preferred = getPanelFromDb(preferredSizeW);
-  const others = SOLAR_PANELS.filter(p => p.sizeW !== preferred.sizeW);
+  const others = getAllPanels().filter(
+    p => !(p.sizeW === preferred.sizeW && p.brand === preferred.brand && p.model === preferred.model)
+  );
   return [preferred, ...others];
+}
+
+/** Build a datasheet-backed inverter so Voc/MPPT/fuse math uses real limits. */
+export function createInverterFromDatasheet(input: DatasheetInverterInput): InverterSpecs {
+  const base = createGenericInverter(
+    input.sizeKva,
+    input.voltageV,
+    input.topology || 'hybrid'
+  );
+  return {
+    ...base,
+    brand: (input.brand || 'Datasheet').trim() || 'Datasheet',
+    model: (input.model || `${input.sizeKva} kVA / ${input.voltageV}V (user datasheet)`).trim(),
+    sizeKva: input.sizeKva,
+    voltageV: input.voltageV,
+    topology: input.topology || base.topology,
+    mpptVocLimit: input.mpptVocLimit ?? base.mpptVocLimit,
+    mpptVmpMin: input.mpptVmpMin ?? base.mpptVmpMin,
+    mpptVmpMax: input.mpptVmpMax ?? base.mpptVmpMax,
+    maxPvCurrent: input.maxPvCurrent ?? base.maxPvCurrent,
+    maxPvPower: input.maxPvPower ?? base.maxPvPower,
+    numMppts: input.numMppts ?? base.numMppts,
+    maxStringsPerMppt: input.maxStringsPerMppt ?? base.maxStringsPerMppt,
+    efficiency: input.efficiency ?? base.efficiency,
+    maxBatteryChargeCurrentA: input.maxBatteryChargeCurrentA ?? base.maxBatteryChargeCurrentA,
+    maxBatteryDischargeCurrentA:
+      input.maxBatteryDischargeCurrentA ?? base.maxBatteryDischargeCurrentA,
+    surgeFactor: input.surgeFactor ?? base.surgeFactor,
+    phases: input.phases ?? base.phases
+  };
+}
+
+export function getAllInverters(market: CatalogMarketId = 'global'): InverterSpecs[] {
+  const merged = [...INVERTERS, ...EXTRA_INVERTERS];
+  return merged.filter(inv => inverterInMarket(inv.regions, market));
 }
 
 export const INVERTERS: InverterSpecs[] = [
@@ -346,12 +474,16 @@ export const INVERTERS: InverterSpecs[] = [
     sizeKva: 12.0,
     voltageV: 48,
     mpptVocLimit: 800,
-    mpptVmpMin: 160,
+    // Datasheet MPPT operating window is 200–650 V (start-up 160 V).
+    mpptVmpMin: 200,
     mpptVmpMax: 650,
     maxPvCurrent: 26,
-    maxPvPower: 15600,
+    // Datasheet: PV input current 26 A + 13 A; strings per MPPT 2+1; max PV input ~18 kW.
+    maxPvPower: 18000,
     numMppts: 2,
     maxStringsPerMppt: 2,
+    mpptInputCurrentsA: [26, 13],
+    mpptMaxStrings: [2, 1],
     efficiency: 0.975,
     maxBatteryChargeCurrentA: 240,
     maxBatteryDischargeCurrentA: 240,
@@ -416,18 +548,19 @@ export const INVERTERS: InverterSpecs[] = [
     topology: 'off_grid',
     phases: 1
   },
-  {
+    {
     brand: 'Deye',
     model: 'SUN-20K-SG05LP3 20kVA 3-Phase',
     sizeKva: 20.0,
     voltageV: 48,
     mpptVocLimit: 800,
-    mpptVmpMin: 160,
+    mpptVmpMin: 200,
     mpptVmpMax: 650,
     maxPvCurrent: 36,
     maxPvPower: 26000,
     numMppts: 2,
     maxStringsPerMppt: 2,
+    mpptInputCurrentsA: [36, 36],
     efficiency: 0.97,
     maxBatteryChargeCurrentA: 350,
     maxBatteryDischargeCurrentA: 350,
@@ -514,27 +647,68 @@ export const INVERTERS: InverterSpecs[] = [
   },
 ];
 
-export function getInvertersForVoltage(
+/**
+ * Brand-agnostic inverter placeholder when the local catalog has no SKU
+ * that meets the physics size at the selected voltage.
+ * Specs are generous so string/protection math can still run for planning.
+ */
+export function createGenericInverter(
+  sizeKva: number,
   systemVoltage: number,
-  inverterType: 'hybrid' | 'off_grid' | 'grid_tie' | 'auto' = 'auto'
-): InverterSpecs[] {
-  return INVERTERS.filter(inv => {
-    if (inv.voltageV !== systemVoltage) return false;
-    if (inverterType === 'auto') {
-      return inv.topology === 'hybrid' || inv.topology === 'off_grid';
-    }
-    // This tool sizes battery-backed systems. "Grid-tie" maps to hybrid (grid + battery),
-    // not export-only string inverters without a battery bus.
-    if (inverterType === 'grid_tie') {
-      return inv.topology === 'hybrid';
-    }
-    // Exact topology — never silently mix off-grid with hybrids
-    return inv.topology === inverterType;
-  }).sort((a, b) => a.sizeKva - b.sizeKva);
+  topology: 'hybrid' | 'off_grid' = 'hybrid'
+): InverterSpecs {
+  const kva = Math.max(0.5, sizeKva);
+  const v = systemVoltage;
+  const isLowV = v <= 24;
+  return {
+    brand: 'Engineering Size',
+    model: `${kva} kVA / ${v}V (select any brand meeting this rating)`,
+    sizeKva: kva,
+    voltageV: v,
+    mpptVocLimit: v <= 12 ? 105 : v <= 24 ? 150 : 550,
+    mpptVmpMin: v <= 12 ? 15 : v <= 24 ? 30 : 90,
+    mpptVmpMax: v <= 12 ? 80 : v <= 24 ? 120 : 480,
+    maxPvCurrent: isLowV ? Math.max(40, Math.ceil(kva * 15)) : Math.max(18, Math.ceil(kva * 4)),
+    maxPvPower: Math.ceil(kva * 1400),
+    numMppts: kva >= 5 ? 2 : 1,
+    maxStringsPerMppt: 2,
+    efficiency: 0.93,
+    maxBatteryChargeCurrentA: Math.ceil((kva * 1000) / Math.max(v, 1) / 0.93),
+    maxBatteryDischargeCurrentA: Math.ceil((kva * 1000 * 1.25) / Math.max(v, 1) / 0.93),
+    surgeFactor: 2.0,
+    topology,
+    phases: 1
+  };
 }
 
-export function getInverterFromDb(targetKva: number, systemVoltage: number): InverterSpecs {
-  const matchingVoltage = getInvertersForVoltage(systemVoltage);
+export function getInvertersForVoltage(
+  systemVoltage: number,
+  inverterType: 'hybrid' | 'off_grid' | 'grid_tie' | 'auto' = 'auto',
+  market: CatalogMarketId = 'global'
+): InverterSpecs[] {
+  return getAllInverters(market)
+    .filter(inv => {
+      if (inv.voltageV !== systemVoltage) return false;
+      if (inverterType === 'auto') {
+        return inv.topology === 'hybrid' || inv.topology === 'off_grid';
+      }
+      // This tool sizes battery-backed systems. "Grid-tie" maps to hybrid (grid + battery),
+      // not export-only string inverters without a battery bus.
+      if (inverterType === 'grid_tie') {
+        return inv.topology === 'hybrid';
+      }
+      // Exact topology — never silently mix off-grid with hybrids
+      return inv.topology === inverterType;
+    })
+    .sort((a, b) => a.sizeKva - b.sizeKva);
+}
+
+export function getInverterFromDb(
+  targetKva: number,
+  systemVoltage: number,
+  market: CatalogMarketId = 'global'
+): InverterSpecs {
+  const matchingVoltage = getInvertersForVoltage(systemVoltage, 'auto', market);
   const exact = matchingVoltage.find(inv => inv.sizeKva === targetKva);
   if (exact) return exact;
 

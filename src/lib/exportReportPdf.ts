@@ -1,11 +1,12 @@
 import { jsPDF } from 'jspdf';
-import type { Calculations, BatteryType, SystemVoltage, InverterType } from '../types';
+import type { Calculations, BatteryType, SystemVoltage, InverterType, DesignAudience } from '../types';
 import {
   buildEngineeringReportMeta,
   getCableEngineeringRows,
   SOFTWARE_VERSION,
   CALCULATION_STANDARDS
 } from './calculations/reportPresentation';
+import { estimateSystemCostBand, plainLanguageSystemSummary } from './calculations/costEstimate';
 
 export interface ReportPdfData {
   calcs: Calculations;
@@ -30,6 +31,7 @@ export interface ReportPdfData {
   }[];
   designId: string;
   issuedAt: Date;
+  designAudience?: DesignAudience;
 }
 
 function sanitizeFilename(filename: string): string {
@@ -343,8 +345,14 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     panelSize,
     appliancesList,
     designId,
-    issuedAt
+    issuedAt,
+    designAudience = 'engineering'
   } = data;
+
+  if (designAudience === 'simple') {
+    await exportSimpleHomeQuotePdf(data, safeName);
+    return;
+  }
 
   const resolvedV =
     (calcs.batteryUnitVoltage || 0) * (calcs.batterySeriesCount || 0) ||
@@ -487,6 +495,59 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   );
   w.rule();
 
+  w.sectionTitle('2b. System Operating Mode (Day / Night Energy Strategy)');
+  w.body(
+    calcs.operatingModeLabel ||
+      (calcs.operatingMode === 'hybrid_essentials'
+        ? 'Hybrid Night Essentials'
+        : 'Full Home Backup'),
+    { bold: true, size: 10 }
+  );
+  w.body(
+    calcs.energyStrategySummary ||
+      'Battery sized from average daily energy over the selected backup hours (Full Home Backup).',
+    { size: 8, color: COLORS.muted }
+  );
+  if (calcs.priorityEnergyBreakdown) {
+    w.kvGrid([
+      {
+        label: 'Critical loads',
+        value: `${calcs.priorityEnergyBreakdown.criticalKwh.toFixed(2)} kWh/day`
+      },
+      {
+        label: 'Essential loads',
+        value: `${calcs.priorityEnergyBreakdown.essentialKwh.toFixed(2)} kWh/day`
+      },
+      {
+        label: 'Managed loads',
+        value: `${calcs.priorityEnergyBreakdown.managedKwh.toFixed(2)} kWh/day`
+      },
+      {
+        label: 'Heavy / optional loads',
+        value: `${calcs.priorityEnergyBreakdown.heavyKwh.toFixed(2)} kWh/day`
+      }
+    ]);
+  }
+  w.kvGrid([
+    {
+      label: 'Night / backup energy budget',
+      value: `${(calcs.nightOrBackupEnergyKwh ?? 0).toFixed(2)} kWh`
+    },
+    {
+      label: 'Daytime solar / grid energy',
+      value: `${(calcs.daytimeEnergyKwh ?? 0).toFixed(2)} kWh`
+    },
+    {
+      label: 'PV harvest target',
+      value: `${(calcs.pvHarvestTargetKwh ?? 0).toFixed(2)} kWh/day`
+    },
+    {
+      label: 'Battery-backed daily (Critical + Essential)',
+      value: `${(calcs.batteryBackedDailyEnergyKwh ?? 0).toFixed(2)} kWh/day`
+    }
+  ]);
+  w.rule();
+
   // --- 3. Components ---
   w.sectionTitle('3. Recommended System Components');
   w.kvGrid([
@@ -562,7 +623,7 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     { label: 'Final Recommendation', value: `${calcs.solarArrayKw} kWp` }
   ]);
   w.body(
-    `Required array = Daily Energy / (Peak Sun Hours x System Efficiency). Recommendation uses ${panelWpActual} Wp modules (${calcs.panelQuantity} panels, ${calcs.panelConfiguration}).`,
+    `Required array = PV harvest target / (Peak Sun Hours x System Efficiency). Recommendation uses ${panelWpActual} Wp modules (${calcs.panelQuantity} panels, ${calcs.panelConfiguration}).`,
     { size: 8, color: COLORS.muted }
   );
   w.body('Why this PV array was selected:', { bold: true, size: 8.5 });
@@ -591,8 +652,10 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     `Array -> Maximum Power Point Tracker (MPPT): cold open-circuit voltage (Voc) <= ${calcs.stringVocMax ?? '-'} V${
       calcs.mpptVocLimit != null ? ` (limit ${calcs.mpptVocLimit} V)` : ''
     } | Standard Test Condition (STC) string maximum power voltage (Vmp) ~ ${calcs.stringVmpMax ?? '-'} V | hot-weather Vmp ~ ${calcs.stringVmpHot ?? '-'} V | current ~ ${calcs.currentPerMpptA ?? '-'} A${
-      calcs.maxPvCurrentA != null ? ` / limit ${calcs.maxPvCurrentA} A` : ''
-    }.`,
+      calcs.mpptCurrentLimitsLabel || calcs.maxPvCurrentA != null
+        ? ` / limits ${calcs.mpptCurrentLimitsLabel || calcs.maxPvCurrentA} A`
+        : ''
+    }${calcs.mpptStringAssignment ? ` (assignment ${calcs.mpptStringAssignment})` : ''}.`,
     { size: 8, color: COLORS.muted }
   );
   w.body(meta.mpptMappingDescription, { size: 8, color: COLORS.muted });
@@ -746,7 +809,10 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   } else {
     w.table(
       ['Assumption', 'Value'],
-      assumptions.map(a => [a.label, `${a.value} ${a.unit}`.trim()]),
+      assumptions.map(a => {
+        const unit = a.unit != null && String(a.unit).trim() !== '' ? ` ${a.unit}` : '';
+        return [a.label, `${a.value}${unit}`.trim()];
+      }),
       [2.5, 1.5]
     );
   }
@@ -789,6 +855,13 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
   w.sectionTitle('B. Design Inputs');
   w.kvGrid([
     { label: 'Backup Time', value: `${backupHours} Hours` },
+    {
+      label: 'System Operating Mode',
+      value:
+        calcs.operatingMode === 'hybrid_essentials'
+          ? 'Hybrid Night Essentials'
+          : 'Full Home Backup'
+    },
     { label: 'Battery Chemistry', value: meta.chemistryLabel },
     {
       label: 'Nominal System Voltage',
@@ -866,6 +939,143 @@ export async function exportReportPdf(data: ReportPdfData, filename: string): Pr
     'This report documents an electrically validated design recommendation. Site conditions and local code authority requirements take precedence.',
     { size: 8, color: COLORS.muted }
   );
+
+  w.addFooter();
+  pdf.save(`${safeName}.pdf`);
+}
+
+/** Shorter homeowner-facing PDF: plain summary + cost + sizes (no Voc/MPPT tables). */
+async function exportSimpleHomeQuotePdf(data: ReportPdfData, safeName: string): Promise<void> {
+  const {
+    calcs,
+    projectName,
+    clientName,
+    clientPhone,
+    location,
+    projectType,
+    backupHours,
+    appliancesList,
+    designId,
+    issuedAt
+  } = data;
+
+  const cost = estimateSystemCostBand(calcs);
+  const plain = plainLanguageSystemSummary(calcs);
+  const w = new PdfWriter();
+  const { pdf } = w;
+  const issuedLabel = issuedAt.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+
+  pdf.setFillColor(...COLORS.brand);
+  pdf.circle(w.margin + 2, w.y + 2, 1.8, 'F');
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(9);
+  pdf.setTextColor(...COLORS.brand);
+  pdf.text(pdfSafe('VOLTSOLAR HOME SYSTEM QUOTE'), w.margin + 6, w.y + 3);
+  w.y += 9;
+
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(16);
+  pdf.setTextColor(...COLORS.navy);
+  pdf.text(pdfSafe('YOUR SOLAR BACKUP RECOMMENDATION'), w.margin, w.y);
+  w.y += 7;
+
+  w.body('Plain-language sizes and a planning cost range for homeowners and sales.', {
+    size: 8.5,
+    color: COLORS.muted
+  });
+  w.body(`Design ID ${designId}  |  Issued ${issuedLabel}`, { size: 8, color: COLORS.muted });
+  w.rule();
+
+  w.sectionTitle('In plain language');
+  w.body(plain.headline, { bold: true, size: 11 });
+  w.body(
+    `Goal: ${calcs.systemGoalLabel || 'Home backup'} · ${backupHours} h backup window`,
+    { size: 9 }
+  );
+  for (const bullet of plain.bullets) {
+    w.body(`- ${bullet}`, { size: 9 });
+  }
+  w.rule();
+
+  w.sectionTitle('Estimated installed cost (planning range)');
+  w.body(cost.ngn.formatted, { bold: true, size: 14 });
+  w.body(`${cost.usd.formatted} USD equivalent`, { size: 10 });
+  w.body(cost.disclaimer, { size: 8, color: COLORS.muted });
+  for (const c of cost.components) {
+    w.body(
+      `${c.label}: NGN ${Math.round(c.ngnLow).toLocaleString()} - ${Math.round(c.ngnHigh).toLocaleString()}`,
+      { size: 8, color: COLORS.muted }
+    );
+  }
+  w.rule();
+
+  w.sectionTitle('Client & site');
+  w.kvGrid([
+    { label: 'Project', value: projectName || 'Unnamed' },
+    { label: 'Client', value: clientName || 'Unspecified' },
+    { label: 'Location', value: location || 'Unspecified' },
+    { label: 'Phone', value: clientPhone || 'None' },
+    {
+      label: 'Type',
+      value: projectType === 'commercial' ? 'Commercial' : 'Residential'
+    },
+    {
+      label: 'Operating mode',
+      value:
+        calcs.operatingMode === 'hybrid_essentials'
+          ? 'Hybrid Night Essentials'
+          : 'Full Home Backup'
+    }
+  ]);
+  w.rule();
+
+  w.sectionTitle('Recommended system');
+  w.kvGrid([
+    { label: 'Inverter', value: `${calcs.inverterSizeKva} kVA` },
+    {
+      label: 'Battery',
+      value: `${(calcs.batteryInstalledKwh || calcs.batteryCapacityKwh).toFixed(1)} kWh`
+    },
+    { label: 'Solar array', value: `${calcs.solarArrayKw} kWp` },
+    { label: 'Panels', value: `${calcs.panelQuantity} x config ${calcs.panelConfiguration || '-'}` },
+    {
+      label: 'Daily use (design)',
+      value: `${((calcs.dailyEnergy || 0) / 1000).toFixed(1)} kWh/day`
+    },
+    {
+      label: 'Est. solar harvest',
+      value: `~${calcs.estimatedDailyProductionKwh || 0} kWh/day`
+    }
+  ]);
+  w.rule();
+
+  w.sectionTitle('Appliance list (summary)');
+  if (appliancesList.length === 0) {
+    w.body('No appliances listed.', { color: COLORS.amber });
+  } else {
+    w.table(
+      ['Appliance', 'Qty', 'W', 'Hrs', 'kWh'],
+      appliancesList.map(a => [
+        a.applianceName,
+        String(a.quantity),
+        String(a.customWattage),
+        String(a.hoursUsed),
+        ((a.customWattage * a.quantity * a.hoursUsed) / 1000).toFixed(2)
+      ]),
+      [2.6, 0.7, 0.8, 0.7, 0.8]
+    );
+  }
+  w.rule();
+
+  w.body(
+    'This is a planning quote, not a formal tender. Ask your installer for Voc/MPPT/protection schedules if needed, or re-export as Full engineering design.',
+    { size: 8, color: COLORS.muted }
+  );
+  w.body(`Software Version ${SOFTWARE_VERSION}`, { size: 8, color: COLORS.muted });
 
   w.addFooter();
   pdf.save(`${safeName}.pdf`);

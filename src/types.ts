@@ -11,6 +11,13 @@ export interface UserProfile {
 export type BatteryType = 'lithium' | 'tubular' | 'agm' | 'gel';
 export type SystemVoltage = '12V' | '24V' | '48V' | 'auto';
 export type InverterType = 'hybrid' | 'off_grid' | 'grid_tie' | 'auto';
+/** Full home backup (legacy) vs hybrid night essentials (solar/grid by day). */
+export type OperatingMode = 'full_backup' | 'hybrid_essentials';
+export type LoadPriority = 'critical' | 'essential' | 'managed' | 'heavy';
+/** Simple home quote vs full engineering report. */
+export type DesignAudience = 'simple' | 'engineering';
+/** Novice-facing system goal (maps to backup hours + operating mode). */
+export type SystemGoal = 'overnight_essentials' | 'half_day_backup' | 'full_home';
 
 export interface Project {
   id: string;
@@ -25,6 +32,10 @@ export interface Project {
   batteryType: BatteryType;
   systemVoltage: SystemVoltage;
   inverterType: InverterType;
+  /** Defaults to hybrid_essentials for new residential; older projects may omit. */
+  operatingMode?: OperatingMode;
+  designAudience?: DesignAudience;
+  systemGoal?: SystemGoal;
   panelSize: number; // in Watts, e.g., 550
   createdAt: string;
   appliances: ProjectAppliance[];
@@ -52,6 +63,11 @@ export interface ProjectAppliance {
   hoursUsed: number; // per day
   /** When set (e.g. custom appliances), overrides name-based surge lookup */
   surgeMultiplier?: number;
+  /**
+   * Hybrid load priority. When omitted, a name-based default is applied.
+   * critical | essential | managed | heavy
+   */
+  loadPriority?: LoadPriority;
 }
 
 export interface Calculations {
@@ -126,6 +142,10 @@ export interface Calculations {
   mpptVmpMax?: number;
   currentPerMpptA?: number;
   maxPvCurrentA?: number;
+  /** e.g. "26+13" when MPPTs are asymmetric */
+  mpptCurrentLimitsLabel?: string;
+  /** e.g. "1+1" string counts per MPPT after assignment */
+  mpptStringAssignment?: string;
   maxPvPowerW?: number;
   seriesCount?: number;
   parallelCount?: number;
@@ -136,6 +156,8 @@ export interface Calculations {
   /** Module wattage actually selected by the solver (may differ from preferred) */
   selectedPanelWattageWp?: number;
   targetPvKw?: number;
+  /** Minimum array size from PV harvest target / (PSH × efficiency) */
+  requiredArrayKwp?: number;
   panelSizingCompatibilityOk?: boolean;
   panelSizingCompatibilityWarning?: string;
 
@@ -143,6 +165,23 @@ export interface Calculations {
   inverterPreferredSizeKva?: number;
   inverterMinimumSizeKva?: number;
   inverterModelRecommended?: string;
+  /** Physics-first commercial inverter size (kVA) before brand matching. */
+  engineeringRequiredInverterKva?: number;
+  /** Physics-first battery installed target (kWh, lithium-class planning). */
+  engineeringRequiredBatteryKwh?: number;
+  /** Physics-first PV array target (kWp). */
+  engineeringRequiredArrayKwp?: number;
+  /** Suggested DC bus from load class (12 | 24 | 48). */
+  suggestedSystemVoltageV?: number;
+  /** Plain-language voltage / sizing guidance. */
+  voltageGuidance?: string;
+  /** catalog = brand SKU; datasheet = user-entered; generic = engineering size only. */
+  catalogMatchMode?: 'catalog' | 'generic' | 'datasheet';
+  /** Equipment market pack used for brand matching. */
+  catalogMarket?: string;
+  /** How peak sun hours were resolved. */
+  peakSunHoursSource?: string;
+  peakSunHoursNote?: string;
 
   // Protection Sizing Schedule
   protectionSchedule?: {
@@ -211,4 +250,31 @@ export interface Calculations {
 
   // Dynamic Single-Line Diagram
   singleLineDiagramSvg?: string;
+
+  /** Operating strategy used for this design (defaults to full_backup). */
+  operatingMode?: OperatingMode;
+  operatingModeLabel?: string;
+  energyStrategySummary?: string;
+  designAudience?: DesignAudience;
+  systemGoal?: SystemGoal;
+  systemGoalLabel?: string;
+  costEstimateNgnLow?: number;
+  costEstimateNgnHigh?: number;
+  costEstimateUsdLow?: number;
+  costEstimateUsdHigh?: number;
+  costEstimateDisclaimer?: string;
+  batteryBackedDailyEnergyKwh?: number;
+  solarGridPreferredDailyEnergyKwh?: number;
+  nightOrBackupEnergyKwh?: number;
+  daytimeEnergyKwh?: number;
+  pvHarvestTargetKwh?: number;
+  priorityEnergyBreakdown?: {
+    criticalKwh: number;
+    essentialKwh: number;
+    managedKwh: number;
+    heavyKwh: number;
+  };
+  /** Connected / peak load used for inverter selection (may exclude Heavy in hybrid mode). */
+  inverterDesignConnectedLoadW?: number;
+  inverterDesignPeakLoadW?: number;
 }

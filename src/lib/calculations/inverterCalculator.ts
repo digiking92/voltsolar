@@ -1,6 +1,7 @@
 import { InverterType } from '../../types';
 import { InverterSpecs, getInvertersForVoltage } from './equipmentDatabase';
 import { SYSTEM_STANDARDS } from './engineeringStandards';
+import type { CatalogMarketId } from './catalogMarkets';
 
 export interface InverterValidationResult {
   valid: boolean;
@@ -97,17 +98,18 @@ export function searchCompatibleInverters(
   systemVoltage: number,
   connectedLoadW: number,
   peakLoadW: number,
-  inverterType: InverterType
+  inverterType: InverterType,
+  catalogMarket: CatalogMarketId = 'global'
 ): RankedInverter[] {
   const { minimumSizeKva, preferredSizeKva } = calculateInverterSizingTargets(
     connectedLoadW,
     peakLoadW
   );
 
-  let pool = getInvertersForVoltage(systemVoltage, inverterType);
+  let pool = getInvertersForVoltage(systemVoltage, inverterType, catalogMarket);
   // If a strict topology has no SKUs at this voltage, fall back to workable battery-backed units
   if (pool.length === 0 && inverterType !== 'auto') {
-    pool = getInvertersForVoltage(systemVoltage, 'auto');
+    pool = getInvertersForVoltage(systemVoltage, 'auto', catalogMarket);
   }
 
   const ranked: RankedInverter[] = [];
@@ -128,11 +130,23 @@ export function searchCompatibleInverters(
     if (!validation.valid) continue;
 
     let score = 100;
-    // Prefer meeting 1.25× continuous with least oversizing
-    const ratio = inverter.sizeKva / Math.max(preferredSizeKva, 0.1);
-    if (ratio >= 1.0 && ratio <= 1.4) score += 80;
-    else if (ratio > 1.4) score += Math.max(0, 50 - (ratio - 1.4) * 40);
+    const needKva = Math.max(preferredSizeKva, 0.1);
+    const ratio = inverter.sizeKva / needKva;
+
+    // Physics-first: reward closest adequate size; heavily punish oversizing.
+    // (Previously the penalty floored at 0, so 5 kVA and 20 kVA tied — then MPPT bonuses picked 20 kVA.)
+    if (ratio >= 1.0 && ratio <= 1.35) score += 120 - (ratio - 1) * 40;
+    else if (ratio > 1.35) score -= (ratio - 1.35) * 90;
     else score += ratio * 40;
+
+    // Direct kVA gap penalty so catalog matching never jumps to huge SKUs
+    const oversizeKva = inverter.sizeKva - needKva;
+    if (oversizeKva > 0) score -= oversizeKva * 18;
+
+    // Prefer continuous rating that covers peak demand (not only surge capacity)
+    const peakKw = peakLoadW / 1000;
+    if (inverter.sizeKva >= peakKw) score += 20;
+    else if (inverter.sizeKva * inverter.surgeFactor >= peakKw) score += 8;
 
     // Prefer exact topology match; do not blanket-boost every hybrid
     if (inverterType === 'off_grid' && inverter.topology === 'off_grid') score += 50;
@@ -142,12 +156,12 @@ export function searchCompatibleInverters(
     else if (inverterType !== 'auto' && inverter.topology !== inverterType && inverterType !== 'grid_tie')
       score -= 25; // fallback SKUs from empty-pool recovery
 
-    score += Math.min(30, inverter.numMppts * 10);
-    // Mild preference for adequate MPPT current — do not dominate brand choice
-    score += Math.min(8, inverter.maxPvCurrent * 0.25);
+    // Small MPPT convenience bonuses — must NEVER outweigh kVA fitness
+    score += Math.min(12, inverter.numMppts * 4);
+    score += Math.min(4, inverter.maxPvCurrent * 0.08);
+    if (peakKw >= 8 && inverter.phases === 3) score += 15;
 
     const continuousKw = connectedLoadW / 1000;
-    const peakKw = peakLoadW / 1000;
     const surgeKw = inverter.sizeKva * inverter.surgeFactor;
     const expansionPct = Math.max(
       0,
@@ -155,6 +169,7 @@ export function searchCompatibleInverters(
     );
     const reason =
       `${inverter.brand} ${inverter.model} (${inverter.sizeKva} kilovolt-ampere / kVA) selected. ` +
+      `Engineering need ~${needKva.toFixed(2)} kVA (1.25× continuous / surge). ` +
       `Total Connected Load: ${continuousKw.toFixed(2)} kW within ${inverter.sizeKva} kVA rating. ` +
       `Peak Demand: ${peakKw.toFixed(2)} kW. ` +
       `Surge Requirement: ${peakKw.toFixed(2)} kW <= ${surgeKw.toFixed(1)} kW inverter surge capacity. ` +
@@ -172,5 +187,11 @@ export function searchCompatibleInverters(
     });
   }
 
-  return ranked.sort((a, b) => b.score - a.score);
+  // Primary sort: smallest adequate kVA; secondary: score (topology / mild MPPT fit)
+  return ranked.sort((a, b) => {
+    if (a.inverter.sizeKva !== b.inverter.sizeKva) {
+      return a.inverter.sizeKva - b.inverter.sizeKva;
+    }
+    return b.score - a.score;
+  });
 }

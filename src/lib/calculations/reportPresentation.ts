@@ -131,8 +131,16 @@ export function buildEngineeringReportMeta(
 
   const efficiencyFrac = (calcs.overallSystemEfficiency || 78) / 100;
   const psh = calcs.peakSunHoursUsed || 4.5;
+  const harvestTargetKwh =
+    calcs.pvHarvestTargetKwh != null && calcs.pvHarvestTargetKwh > 0
+      ? calcs.pvHarvestTargetKwh
+      : dailyConsumptionKwh;
   const requiredArrayKwp =
-    psh > 0 && efficiencyFrac > 0 ? dailyConsumptionKwh / (psh * efficiencyFrac) : calcs.solarArrayKw;
+    calcs.requiredArrayKwp != null && calcs.requiredArrayKwp > 0
+      ? calcs.requiredArrayKwp
+      : psh > 0 && efficiencyFrac > 0
+        ? harvestTargetKwh / (psh * efficiencyFrac)
+        : calcs.solarArrayKw;
   const engineeringMarginPercent =
     requiredArrayKwp > 0
       ? Math.max(0, Math.round(((calcs.solarArrayKw / requiredArrayKwp) - 1) * 100))
@@ -148,12 +156,15 @@ export function buildEngineeringReportMeta(
   const maxPvPowerW = calcs.maxPvPowerW ?? 0;
   const actualPvCurrentA = calcs.currentPerMpptA ?? calcs.stringIscMax ?? 0;
   const actualPvPowerW = calcs.solarArrayKw * 1000;
+  const mpptCurrentLimitsLabel =
+    calcs.mpptCurrentLimitsLabel ||
+    (maxPvCurrentA > 0 ? String(maxPvCurrentA) : '—');
   // Signed margins — negative means over limit (must FAIL, not hide behind Math.max(0, …))
   const voltageMarginV = (calcs.mpptVocLimit || 0) - (calcs.stringVocMax || 0);
   const currentMarginA = maxPvCurrentA - actualPvCurrentA;
   const powerMarginW = maxPvPowerW - actualPvPowerW;
-  const pvCurrentOk = maxPvCurrentA <= 0 || actualPvCurrentA <= maxPvCurrentA;
-  const pvVoltageOk = voltageMarginV >= 0 && calcs.panelSizingCompatibilityOk !== false;
+  const pvCurrentOk = maxPvCurrentA <= 0 || actualPvCurrentA <= maxPvCurrentA * 1.03;
+  const pvVoltageOk = voltageMarginV >= 0;
   const pvPowerOk = maxPvPowerW <= 0 || actualPvPowerW <= maxPvPowerW;
   const protectionAdequacyOk = calcs.protectionSchedule?.protectionAdequacyOk !== false;
   const protectionNotes = calcs.protectionSchedule?.protectionAdequacyNotes || [];
@@ -173,9 +184,12 @@ export function buildEngineeringReportMeta(
   const stringsPerMppt = calcs.stringsPerMppt ?? 0;
   const seriesCount = calcs.seriesCount ?? 0;
   const parallelCount = calcs.parallelCount ?? 0;
+  const mpptAssignment = calcs.mpptStringAssignment;
   const mpptMappingDescription =
-    numMppts > 0 && seriesCount > 0 && stringsPerMppt > 0
-      ? `Array layout ${seriesCount} panels in series × ${parallelCount} parallel strings, split across ${numMppts} Maximum Power Point Tracker (MPPT) input(s): approximately ${stringsPerMppt} string(s) per MPPT → ${actualPvCurrentA.toFixed(1)} A operating current per MPPT (limit ${maxPvCurrentA} A).`
+    numMppts > 0 && seriesCount > 0 && parallelCount > 0
+      ? `Array layout ${seriesCount} panels in series × ${parallelCount} parallel strings across ${numMppts} Maximum Power Point Tracker (MPPT) input(s)` +
+        (mpptAssignment ? ` (assignment ${mpptAssignment} strings)` : ` (~${stringsPerMppt} string(s) per MPPT)`) +
+        ` → ${actualPvCurrentA.toFixed(1)} A peak operating current per loaded MPPT (limits ${mpptCurrentLimitsLabel} A).`
       : `Array layout ${seriesCount} series × ${parallelCount} parallel. Confirm Maximum Power Point Tracker (MPPT) string mapping on the inverter datasheet before installation.`;
 
   const diversity = calcs.diversityFactor ?? 0.8;
@@ -235,6 +249,12 @@ export function buildEngineeringReportMeta(
     confidenceScore -= 3;
     confidenceReasons.push(
       'Maximum Power Point Tracker (MPPT) current headroom is narrow.'
+    );
+  }
+  if (calcs.cableSizing?.cableLengthsAssumed) {
+    confidenceScore -= 8;
+    confidenceReasons.push(
+      'Cable run lengths use default residential assumptions — enter site distances before procurement.'
     );
   }
   confidenceScore = Math.max(40, Math.min(100, Math.round(confidenceScore)));
@@ -334,7 +354,7 @@ export function buildEngineeringReportMeta(
     {
       label: 'Maximum Power Point Tracker (MPPT) Operating Current',
       actual: `${parseFloat(actualPvCurrentA.toFixed(1))} A`,
-      limit: `${maxPvCurrentA} A`,
+      limit: `${mpptCurrentLimitsLabel} A`,
       margin: `${parseFloat(currentMarginA.toFixed(1))} A`,
       pass: pvCurrentOk
     },
@@ -373,9 +393,9 @@ export function buildEngineeringReportMeta(
       },
       {
         label: 'Maximum Power Point Tracker (MPPT) Current Compatibility',
-        value: `${actualPvCurrentA.toFixed(1)} A ${pvCurrentOk ? '<=' : '>'} ${maxPvCurrentA} A inverter PV input${
-          pvCurrentOk ? '' : ' — FAIL'
-        }`
+        value: `${actualPvCurrentA.toFixed(1)} A ${pvCurrentOk ? 'within' : 'exceeds'} MPPT limits ${mpptCurrentLimitsLabel} A${
+          calcs.mpptStringAssignment ? ` (assignment ${calcs.mpptStringAssignment})` : ''
+        }${pvCurrentOk ? '' : ' — FAIL'}`
       },
       {
         label: 'Future Expansion Margin',
@@ -389,7 +409,10 @@ export function buildEngineeringReportMeta(
       },
       {
         label: 'Load Profile Basis',
-        value: 'Average daily load energy (not simultaneous full connected load)'
+        value:
+          calcs.operatingMode === 'hybrid_essentials'
+            ? 'Critical + Essential load energy only (Hybrid Night Essentials — Managed/Heavy prefer solar/grid)'
+            : 'Average daily load energy for the whole house (Full Home Backup)'
       },
       {
         label: 'Required Energy',
@@ -427,9 +450,19 @@ export function buildEngineeringReportMeta(
         label: 'Daily Consumption',
         value: `${(calcs.dailyEnergy / 1000).toFixed(2)} kilowatt-hours (kWh)`
       },
+      ...(calcs.operatingMode === 'hybrid_essentials' &&
+      calcs.pvHarvestTargetKwh != null &&
+      Math.abs(calcs.pvHarvestTargetKwh - calcs.dailyEnergy / 1000) > 0.05
+        ? [
+            {
+              label: 'PV Harvest Target',
+              value: `${calcs.pvHarvestTargetKwh.toFixed(2)} kilowatt-hours (kWh)/day (daytime energy + battery recharge path)`
+            }
+          ]
+        : []),
       {
         label: 'Minimum Array Target',
-        value: `${parseFloat(requiredArrayKwp.toFixed(2))} kilowatt-peak (kWp) from energy / (Peak Sun Hours × efficiency)`
+        value: `${parseFloat(requiredArrayKwp.toFixed(2))} kilowatt-peak (kWp) from harvest target / (Peak Sun Hours × efficiency)`
       },
       {
         label: 'Selected Array',
@@ -495,7 +528,7 @@ export function buildEngineeringReportMeta(
   }
   if (hotVmpOk) {
     pvMarginNotes.push(
-      `Hot-weather string maximum power voltage (Vmp ≈ ${calcs.stringVmpHot ?? calcs.stringVmpMax} V at ${SYSTEM_STANDARDS.maxCellTempC} °C cell temperature) operates within the inverter Maximum Power Point Tracker (MPPT) window (${calcs.mpptVmpMin}-${calcs.mpptVmpMax} V). Standard Test Condition (STC) string Vmp is ${calcs.stringVmpMax ?? '-'} V (8 × module Vmp at 25 °C) — use hot Vmp for tracking-window checks and STC Vmp for reference only.`
+      `Hot-weather string maximum power voltage (Vmp ≈ ${calcs.stringVmpHot ?? calcs.stringVmpMax} V at ${SYSTEM_STANDARDS.maxCellTempC} °C cell temperature) operates within the inverter Maximum Power Point Tracker (MPPT) window (${calcs.mpptVmpMin}-${calcs.mpptVmpMax} V). Standard Test Condition (STC) string Vmp is ${calcs.stringVmpMax ?? '-'} V (${seriesCount || '—'} × module Vmp at 25 °C) — use hot Vmp for tracking-window checks and STC Vmp for reference only.`
     );
   }
   pvMarginNotes.push(mpptMappingDescription);

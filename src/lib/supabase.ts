@@ -139,6 +139,18 @@ export const supabaseApi = {
           batteryType: item.battery_type,
           systemVoltage: item.system_voltage,
           inverterType: item.inverter_type,
+          operatingMode:
+            item.calculations?.operatingMode === 'hybrid_essentials'
+              ? 'hybrid_essentials'
+              : 'full_backup',
+          designAudience:
+            item.calculations?.designAudience === 'engineering' ? 'engineering' : 'simple',
+          systemGoal:
+            item.calculations?.systemGoal === 'half_day_backup' ||
+            item.calculations?.systemGoal === 'full_home' ||
+            item.calculations?.systemGoal === 'overnight_essentials'
+              ? item.calculations.systemGoal
+              : 'overnight_essentials',
           panelSize: Number(item.panel_size),
           createdAt: item.created_at,
           appliances: Array.isArray(item.appliances) ? item.appliances : [],

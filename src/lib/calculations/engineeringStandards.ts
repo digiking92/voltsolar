@@ -1,31 +1,11 @@
-export interface SolarRegion {
-  name: string;
-  peakSunHours: number;
-}
-
-export const SOLAR_REGIONS: SolarRegion[] = [
-  { name: 'austin', peakSunHours: 4.8 },
-  { name: 'london', peakSunHours: 3.2 },
-  { name: 'lagos', peakSunHours: 5.2 },
-  { name: 'sydney', peakSunHours: 5.0 },
-  { name: 'miami', peakSunHours: 5.1 },
-  { name: 'nairobi', peakSunHours: 5.6 },
-  { name: 'berlin', peakSunHours: 3.4 },
-  { name: 'paris', peakSunHours: 3.5 },
-  { name: 'cairo', peakSunHours: 6.2 },
-  { name: 'tokyo', peakSunHours: 3.8 },
-  { name: 'new york', peakSunHours: 4.2 },
-  { name: 'los angeles', peakSunHours: 5.4 },
-  { name: 'johannesburg', peakSunHours: 5.5 },
-  { name: 'mumbai', peakSunHours: 4.9 },
-  { name: 'dubai', peakSunHours: 5.8 }
-];
-
-export function getPeakSunHours(location: string): number {
-  const normalized = location.toLowerCase().trim();
-  const found = SOLAR_REGIONS.find(r => normalized.includes(r.name));
-  return found ? found.peakSunHours : 4.5; // Default fallback to 4.5 Peak Sun Hours
-}
+export {
+  SOLAR_REGIONS,
+  getPeakSunHours,
+  resolvePeakSunHours,
+  fetchNasaPowerPeakSunHours,
+  lookupCityPeakSunHours
+} from './peakSunHours';
+export type { SolarRegion, PeakSunHoursResult, PshSource } from './peakSunHours';
 
 export const SURGE_MULTIPLIERS: Record<string, number> = {
   'led': 1.0,
@@ -102,7 +82,7 @@ export interface PanelSpecs {
 export const PANEL_STANDARDS: PanelSpecs[] = [
   { sizeW: 300, voc: 34.0, vmp: 28.5, isc: 11.2, imp: 10.53 },
   { sizeW: 400, voc: 37.2, vmp: 31.0, isc: 13.6, imp: 12.9 },
-  { sizeW: 550, voc: 49.8, vmp: 41.5, isc: 14.0, imp: 13.25 },
+  { sizeW: 550, voc: 49.8, vmp: 41.3, isc: 13.99, imp: 13.25 },
   { sizeW: 600, voc: 54.2, vmp: 45.3, isc: 14.1, imp: 13.25 }
 ];
 

@@ -1,9 +1,13 @@
-import { PanelSpecs, InverterSpecs } from './equipmentDatabase';
+import { PanelSpecs, InverterSpecs, getMpptChannels, formatMpptCurrentLimits } from './equipmentDatabase';
 import { SYSTEM_STANDARDS } from './engineeringStandards';
+
+/** Allow tiny Imp overshoot vs datasheet continuous rating (module rounding / STC vs field). */
+const MPPT_IMP_SOFT_TOLERANCE = 1.03;
 
 export interface StringValidationResult {
   valid: boolean;
   failures: string[];
+  warnings: string[];
   seriesCount: number;
   parallelCount: number;
   totalPanels: number;
@@ -15,9 +19,17 @@ export interface StringValidationResult {
   stringVmpNominal: number;
   stringIscMax: number;
   stringImpMax: number;
+  /** Highest Imp current on any loaded MPPT after optimal assignment */
   currentPerMppt: number;
+  /** Tightest continuous current limit among loaded MPPTs for this assignment */
+  limitingMpptCurrentA: number;
   powerPerMppt: number;
+  /** Max strings assigned to any single MPPT */
   stringsPerMppt: number;
+  /** e.g. "1+1" or "2+0" */
+  mpptStringAssignment: string;
+  /** e.g. "26+13" */
+  mpptCurrentLimitsLabel: string;
   maxPanelsInSeries: number;
   minPanelsInSeries: number;
   maxParallelStrings: number;
@@ -53,6 +65,89 @@ function temperatureAdjustedVmpHot(panel: PanelSpecs): number {
   return panel.vmp * (1 + (betaVmp * (maxCellTempC - stcTempC)) / 100);
 }
 
+interface MpptAssignment {
+  strings: number[];
+  currents: number[];
+  maxCurrent: number;
+  limitingLimit: number;
+  softOver: boolean;
+  maxUtil: number;
+}
+
+/**
+ * Enumerate feasible string→MPPT assignments and pick the one with lowest peak utilization.
+ * Prefers spreading across trackers when utilization is equal.
+ */
+function findBestMpptAssignment(
+  parallelCount: number,
+  channels: { currentA: number; maxStrings: number }[],
+  panelImp: number
+): MpptAssignment | null {
+  const n = channels.length;
+  if (n < 1 || parallelCount < 1) return null;
+
+  let best: MpptAssignment | null = null;
+
+  const recurse = (idx: number, remaining: number, acc: number[]) => {
+    if (idx === n - 1) {
+      if (remaining > channels[idx].maxStrings) return;
+      const strings = [...acc, remaining];
+      evaluate(strings);
+      return;
+    }
+    const maxHere = Math.min(channels[idx].maxStrings, remaining);
+    for (let s = 0; s <= maxHere; s++) {
+      recurse(idx + 1, remaining - s, [...acc, s]);
+    }
+  };
+
+  const evaluate = (strings: number[]) => {
+    const currents = strings.map(s => s * panelImp);
+    let softOver = false;
+    let hardFail = false;
+    let maxUtil = 0;
+    let maxCurrent = 0;
+    let limitingLimit = Infinity;
+
+    for (let i = 0; i < n; i++) {
+      if (strings[i] <= 0) continue;
+      const limit = channels[i].currentA;
+      const cur = currents[i];
+      maxCurrent = Math.max(maxCurrent, cur);
+      limitingLimit = Math.min(limitingLimit, limit);
+      const util = cur / Math.max(limit, 0.01);
+      maxUtil = Math.max(maxUtil, util);
+      if (cur > limit * MPPT_IMP_SOFT_TOLERANCE) hardFail = true;
+      else if (cur > limit) softOver = true;
+    }
+
+    if (hardFail) return;
+    if (!Number.isFinite(limitingLimit)) limitingLimit = channels[0].currentA;
+
+    const loadedTrackers = strings.filter(s => s > 0).length;
+    const candidate: MpptAssignment = {
+      strings,
+      currents,
+      maxCurrent,
+      limitingLimit,
+      softOver,
+      maxUtil
+    };
+
+    if (
+      !best ||
+      candidate.maxUtil < best.maxUtil - 1e-9 ||
+      (Math.abs(candidate.maxUtil - best.maxUtil) < 1e-9 &&
+        loadedTrackers > best.strings.filter(s => s > 0).length)
+    ) {
+      best = candidate;
+    }
+  };
+
+  recurse(0, parallelCount, []);
+  return best;
+}
+
 /**
  * Hard electrical validation for one S×P layout.
  * Invalid layouts are never returned as recommendations.
@@ -64,12 +159,15 @@ export function validateStringConfiguration(
   parallelCount: number
 ): StringValidationResult {
   const failures: string[] = [];
+  const warnings: string[] = [];
   const vocCold = temperatureAdjustedVoc(panel);
   const vmpHot = temperatureAdjustedVmpHot(panel);
+  const channels = getMpptChannels(inverter);
+  const mpptCurrentLimitsLabel = formatMpptCurrentLimits(inverter);
 
   const maxPanelsInSeries = Math.floor(inverter.mpptVocLimit / vocCold);
   const minPanelsInSeries = Math.ceil(inverter.mpptVmpMin / vmpHot);
-  const maxParallelStrings = inverter.numMppts * inverter.maxStringsPerMppt;
+  const maxParallelStrings = channels.reduce((sum, c) => sum + c.maxStrings, 0);
 
   const totalPanels = seriesCount * parallelCount;
   const totalPvPowerW = totalPanels * panel.sizeW;
@@ -79,10 +177,16 @@ export function validateStringConfiguration(
   const stringIscMax = parallelCount * panel.isc;
   const stringImpMax = parallelCount * panel.imp;
 
-  const stringsPerMppt = Math.ceil(parallelCount / inverter.numMppts);
-  // Operating current vs MPPT rating uses Imp; Isc is used for protection/cable later
-  const currentPerMppt = stringsPerMppt * panel.imp;
+  const assignment = findBestMpptAssignment(parallelCount, channels, panel.imp);
+  const stringsPerMppt = assignment
+    ? Math.max(...assignment.strings, 0)
+    : Math.ceil(parallelCount / Math.max(channels.length, 1));
+  const currentPerMppt = assignment?.maxCurrent ?? stringsPerMppt * panel.imp;
+  const limitingMpptCurrentA = assignment?.limitingLimit ?? inverter.maxPvCurrent;
   const powerPerMppt = seriesCount * stringsPerMppt * panel.sizeW;
+  const mpptStringAssignment = assignment
+    ? assignment.strings.join('+')
+    : `${stringsPerMppt}`.padEnd(1);
 
   if (seriesCount < 1 || parallelCount < 1) {
     failures.push('Series and parallel counts must be at least 1.');
@@ -107,17 +211,30 @@ export function validateStringConfiguration(
       `String Vmp ${stringVmpNominal.toFixed(1)}V exceeds MPPT maximum ${inverter.mpptVmpMax}V.`
     );
   }
-  // Hard limit: actual operating current must not exceed the Maximum Power Point Tracker (MPPT) rating.
-  // Do not allow a silent soft tolerance — over-limit layouts must FAIL validation.
-  if (currentPerMppt > inverter.maxPvCurrent) {
+  if (!assignment) {
     failures.push(
-      `Maximum Power Point Tracker (MPPT) operating current ${currentPerMppt.toFixed(1)} A exceeds inverter MPPT limit ${inverter.maxPvCurrent} A.`
+      `Cannot assign ${parallelCount} parallel string(s) within MPPT string limits (${channels
+        .map(c => c.maxStrings)
+        .join('+')}) at Imp ${panel.imp} A vs limits ${mpptCurrentLimitsLabel} A.`
     );
-  }
-  if (stringsPerMppt > inverter.maxStringsPerMppt) {
-    failures.push(
-      `${stringsPerMppt} strings per MPPT exceeds inverter limit of ${inverter.maxStringsPerMppt}.`
-    );
+  } else {
+    for (let i = 0; i < assignment.strings.length; i++) {
+      const s = assignment.strings[i];
+      if (s <= 0) continue;
+      const cur = assignment.currents[i];
+      const limit = channels[i].currentA;
+      if (cur > limit * MPPT_IMP_SOFT_TOLERANCE) {
+        failures.push(
+          `MPPT ${i + 1}: ${s} string(s) at ${cur.toFixed(1)} A Imp exceeds continuous limit ${limit} A.`
+        );
+      } else if (cur > limit) {
+        warnings.push(
+          `MPPT ${i + 1}: ${cur.toFixed(1)} A Imp is slightly above the ${limit} A continuous rating (within ${Math.round(
+            (MPPT_IMP_SOFT_TOLERANCE - 1) * 100
+          )}% engineering tolerance). Prefer lower-Imp modules or confirm with the inverter manufacturer.`
+        );
+      }
+    }
   }
   if (parallelCount > maxParallelStrings) {
     failures.push(
@@ -138,6 +255,7 @@ export function validateStringConfiguration(
   return {
     valid: failures.length === 0,
     failures,
+    warnings,
     seriesCount,
     parallelCount,
     totalPanels,
@@ -150,8 +268,11 @@ export function validateStringConfiguration(
     stringIscMax: parseFloat(stringIscMax.toFixed(1)),
     stringImpMax: parseFloat(stringImpMax.toFixed(1)),
     currentPerMppt: parseFloat(currentPerMppt.toFixed(1)),
+    limitingMpptCurrentA: parseFloat(limitingMpptCurrentA.toFixed(1)),
     powerPerMppt: parseFloat(powerPerMppt.toFixed(1)),
     stringsPerMppt,
+    mpptStringAssignment,
+    mpptCurrentLimitsLabel,
     maxPanelsInSeries,
     minPanelsInSeries,
     maxParallelStrings
@@ -182,6 +303,7 @@ function scoreLayout(
   // Prefer fewer panels once energy is covered (or closest under target as last resort)
   score += Math.max(0, 60 - checked.totalPanels);
   if (checked.parallelCount % numMppts === 0) score += 25;
+  if (checked.warnings.length > 0) score -= 8 * checked.warnings.length;
   return score;
 }
 
@@ -202,7 +324,8 @@ export function searchValidStringConfigurations(
   const minS = Math.ceil(inverter.mpptVmpMin / vmpHot);
   if (maxS < 1 || minS > maxS) return [];
 
-  const maxP = inverter.numMppts * inverter.maxStringsPerMppt;
+  const channels = getMpptChannels(inverter);
+  const maxP = channels.reduce((sum, c) => sum + c.maxStrings, 0);
   const allValid: PanelConfigurationResult[] = [];
 
   for (let s = minS; s <= maxS; s++) {
@@ -210,6 +333,11 @@ export function searchValidStringConfigurations(
       const checked = validateStringConfiguration(panel, inverter, s, p);
       if (!checked.valid) continue;
       if (checked.totalPanels !== s * p) continue;
+
+      const warnText =
+        checked.warnings.length > 0
+          ? ` ${checked.warnings.join(' ')}`
+          : '';
 
       allValid.push({
         ...checked,
@@ -223,11 +351,14 @@ export function searchValidStringConfigurations(
         mpptVocLimit: inverter.mpptVocLimit,
         mpptVmpMin: inverter.mpptVmpMin,
         mpptVmpMax: inverter.mpptVmpMax,
-        maxPvCurrent: inverter.maxPvCurrent,
+        maxPvCurrent: checked.limitingMpptCurrentA,
         maxPvPower: inverter.maxPvPower,
+        // Soft Imp tolerance still counts as electrically usable (warnings carry the caveat).
         panelSizingCompatibilityOk: true,
         panelSizingCompatibilityWarning:
-          'Selected PV array configuration is fully compatible with inverter MPPT specifications.',
+          checked.warnings.length === 0
+            ? 'Selected PV array configuration is fully compatible with inverter MPPT specifications.'
+            : `Selected PV array configuration is electrically usable with notes:${warnText}`,
         score: scoreLayout(checked, targetPvWatts, preferredWattageMatch, inverter.numMppts)
       });
     }

@@ -1,7 +1,17 @@
-import { ProjectAppliance, BatteryType, SystemVoltage, InverterType, Calculations } from '../../types';
+import { ProjectAppliance, BatteryType, SystemVoltage, InverterType, Calculations, OperatingMode } from '../../types';
 import { calculateLoadSchedule } from './loadCalculator';
-import { getCandidatePanels, PanelSpecs, InverterSpecs } from './equipmentDatabase';
-import { getPeakSunHours, SYSTEM_STANDARDS } from './engineeringStandards';
+import {
+  getCandidatePanels,
+  PanelSpecs,
+  InverterSpecs,
+  formatMpptCurrentLimits,
+  createGenericInverter,
+  createInverterFromDatasheet
+} from './equipmentDatabase';
+import { SYSTEM_STANDARDS } from './engineeringStandards';
+import { resolvePeakSunHours } from './peakSunHours';
+import { resolveCatalogMarket } from './catalogMarkets';
+import type { DesignCalculationOptions } from './designOptions';
 import { configureBatteryBank } from './batteryConfiguration';
 import { sizeProtectionDevices } from './protectionSizing';
 import { sizeSystemCables, CableDistanceInputs } from './cableSizing';
@@ -13,7 +23,15 @@ import {
 import { generateSingleLineDiagram } from './diagramGenerator';
 import { searchBatteryConfigurations, BatteryCalculationResult } from './batteryCalculator';
 import { searchValidStringConfigurations, PanelConfigurationResult } from './panelStringCalculator';
-import { searchCompatibleInverters } from './inverterCalculator';
+import { searchCompatibleInverters, RankedInverter } from './inverterCalculator';
+import {
+  buildHybridEnergyPlan,
+  resolveOperatingMode,
+  withResolvedPriorities
+} from './hybridEnergyModel';
+import { estimateSystemCostBand } from './costEstimate';
+import { getSystemGoal, resolveSystemGoal, type SystemGoal } from './systemGoals';
+import { computePhysicsSizingTargets } from './physicsSizing';
 
 interface SolverCandidate {
   systemVoltage: number;
@@ -27,6 +45,7 @@ interface SolverCandidate {
   inverterReason: string;
   minimumSizeKva: number;
   preferredSizeKva: number;
+  catalogMatchMode: 'catalog' | 'generic' | 'datasheet';
 }
 
 function overallPvEfficiency(
@@ -46,9 +65,23 @@ function overallPvEfficiency(
   );
 }
 
+/** Thermal / soiling / cable / inverter derate only (battery path already in hybrid PV target). */
+function pvCollectionEfficiency(inverterEff: number): number {
+  const { temperatureDeratingFactor, dustLossFactor, cableLossFactor } = SYSTEM_STANDARDS;
+  return (
+    (1 - temperatureDeratingFactor) *
+    (1 - dustLossFactor) *
+    (1 - cableLossFactor) *
+    inverterEff
+  );
+}
+
 /**
  * Constraint solver: search → validate → recommend.
  * Never publishes a design that fails electrical or mathematical validation.
+ *
+ * @param operatingMode full_backup preserves legacy sizing; hybrid_essentials sizes
+ *   battery from Critical+Essential only and PV for daytime + recharge.
  */
 export function runFullDesignCalculations(
   appliances: ProjectAppliance[],
@@ -59,41 +92,79 @@ export function runFullDesignCalculations(
   location: string = 'Austin, TX',
   inverterType: InverterType = 'auto',
   projectType: 'residential' | 'commercial' = 'residential',
-  cableDistances?: CableDistanceInputs
+  cableDistances?: CableDistanceInputs,
+  operatingModeInput: OperatingMode | string = 'hybrid_essentials',
+  systemGoalInput: SystemGoal | string = 'overnight_essentials',
+  designOptions: DesignCalculationOptions = {}
 ): Calculations {
-  const loadRes = calculateLoadSchedule(appliances);
+  const operatingMode = resolveOperatingMode(operatingModeInput);
+  const systemGoal = resolveSystemGoal(systemGoalInput);
+  const goalSpec = getSystemGoal(systemGoal);
+  const catalogMarket = resolveCatalogMarket(designOptions.catalogMarket);
+  const resolvedAppliances = withResolvedPriorities(appliances);
+  const loadRes = calculateLoadSchedule(resolvedAppliances);
   if (loadRes.connectedLoad === 0) {
     throw new Error(
       'Engineering Sizing Blocked: Connected load schedule is empty. Please add at least one appliance to proceed.'
     );
   }
 
+  // Preliminary plan (battery round-trip uses chemistry default until inverter known)
+  const chemEff =
+    batteryType === 'lithium' ? 0.95 : batteryType === 'tubular' ? 0.82 : batteryType === 'gel' ? 0.83 : 0.8;
+  let energyPlan = buildHybridEnergyPlan(
+    resolvedAppliances,
+    backupHours,
+    operatingMode,
+    chemEff,
+    SYSTEM_STANDARDS.inverterEfficiencyFallback
+  );
+
   const candidateVoltages =
     systemVoltage === 'auto'
       ? [48, 24, 12]
       : [parseInt(systemVoltage.replace('V', ''), 10)];
 
-  const psh = getPeakSunHours(location);
+  const pshResolved = resolvePeakSunHours(location, designOptions.peakSunHoursOverride);
+  const psh = pshResolved.peakSunHours;
   const panels = getCandidatePanels(panelSize);
   const candidates: SolverCandidate[] = [];
 
-  for (const vSys of candidateVoltages) {
-    const rankedInverters = searchCompatibleInverters(
-      vSys,
-      loadRes.connectedLoad,
-      loadRes.peakLoad,
-      inverterType
-    ).slice(0, 5); // Top ranked only — full catalog is still searched/ranked first
+  // Physics-first targets (global) — computed before any catalog brand matching
+  const physics = computePhysicsSizingTargets({
+    connectedLoadW: energyPlan.inverterConnectedLoadW,
+    peakLoadW: energyPlan.inverterPeakLoadW,
+    dailyEnergyWh: loadRes.dailyEnergy,
+    batterySizingDailyEnergyWh: energyPlan.batterySizingDailyEnergyWh,
+    backupHours,
+    pvHarvestTargetWh: energyPlan.pvHarvestTargetWh,
+    peakSunHours: psh,
+    forcedSystemVoltage:
+      systemVoltage === 'auto' ? null : parseInt(systemVoltage.replace('V', ''), 10)
+  });
 
+  const pushCandidatesForInverters = (
+    vSys: number,
+    rankedInverters: RankedInverter[],
+    catalogMatchMode: 'catalog' | 'generic' | 'datasheet'
+  ) => {
     for (const invRank of rankedInverters) {
       const inv = invRank.inverter;
 
+      energyPlan = buildHybridEnergyPlan(
+        resolvedAppliances,
+        backupHours,
+        operatingMode,
+        chemEff,
+        inv.efficiency
+      );
+
       const batteryOptions = searchBatteryConfigurations(
-        loadRes.dailyEnergy,
+        energyPlan.batterySizingDailyEnergyWh,
         backupHours,
         batteryType,
         vSys,
-        loadRes.connectedLoad,
+        energyPlan.inverterConnectedLoadW,
         inv.efficiency,
         inv.maxBatteryDischargeCurrentA,
         inv.maxBatteryChargeCurrentA
@@ -102,10 +173,20 @@ export function runFullDesignCalculations(
         .slice(0, 3);
 
       for (const batt of batteryOptions) {
-        const eff = overallPvEfficiency(inv.efficiency, batt.batteryEfficiency);
-        const targetPvWatts = loadRes.dailyEnergy / (psh * eff);
+        const plan = buildHybridEnergyPlan(
+          resolvedAppliances,
+          backupHours,
+          operatingMode,
+          batt.batteryEfficiency,
+          inv.efficiency
+        );
 
-        // Prefer requested wattage first; keep 1 alternate module family
+        const eff =
+          operatingMode === 'hybrid_essentials'
+            ? pvCollectionEfficiency(inv.efficiency)
+            : overallPvEfficiency(inv.efficiency, batt.batteryEfficiency);
+        const targetPvWatts = plan.pvHarvestTargetWh / Math.max(psh * eff, 0.01);
+
         const panelPool = [
           panels[0],
           ...panels.slice(1).filter(p => Math.abs(p.sizeW - panelSize) <= 100).slice(0, 1)
@@ -122,22 +203,48 @@ export function runFullDesignCalculations(
           for (const layout of layouts) {
             if (layout.totalPanels !== layout.seriesCount * layout.parallelCount) continue;
 
-            let score = invRank.score * 0.35 + batt.score * 0.25 + layout.score * 0.4;
-            if (vSys === 48) score += 40;
-            else if (vSys === 24) score += 20;
+            let score = invRank.score * 0.45 + batt.score * 0.25 + layout.score * 0.3;
+            // Prefer suggested voltage class, but never let voltage bonus beat kVA fitness
+            if (vSys === physics.suggestedSystemVoltageV) score += 25;
+            else if (vSys === 48) score += 10;
+            else if (vSys === 24) score += 8;
             if (panel.sizeW === panelSize) score += 30;
-            // Prefer energy-adequate, then the smallest overshoot
             const ratio = layout.totalPvPowerW / Math.max(targetPvWatts, 1);
             if (ratio < 0.999) score -= 400;
             else score += Math.max(0, 50 - (ratio - 1) * 80);
 
+            // Hard guard: PV layout must not justify a hugely oversized inverter
+            const oversizeKva = inv.sizeKva - Math.max(invRank.preferredSizeKva, physics.requiredInverterKva);
+            if (oversizeKva > 0) score -= oversizeKva * 28;
+            if (catalogMatchMode === 'generic') score -= 15; // prefer real SKUs when available
+            if (catalogMatchMode === 'datasheet') score += 60; // user-supplied datasheet preferred
+
             const expansionPct = Math.max(
               0,
-              Math.round((1 - loadRes.connectedLoad / (inv.sizeKva * 1000)) * 100)
+              Math.round(
+                (1 - plan.inverterConnectedLoadW / (inv.sizeKva * 1000)) * 100
+              )
             );
+            const modeNote =
+              operatingMode === 'hybrid_essentials'
+                ? 'Operating mode: Hybrid Night Essentials (battery from Critical + Essential only). '
+                : 'Operating mode: Full Home Backup. ';
+            const matchNote =
+              catalogMatchMode === 'generic'
+                ? 'Catalog note: no exact brand SKU at this voltage/size — using engineering size (pick any local brand meeting the rating). '
+                : catalogMatchMode === 'datasheet'
+                  ? 'Datasheet note: Voc/MPPT/battery limits from user-entered inverter datasheet. '
+                  : '';
+            const mpptLimitLabel = formatMpptCurrentLimits(inv);
+            const mpptOkNote =
+              layout.warnings.length > 0
+                ? `Maximum Power Point Tracker (MPPT) Current Compatibility: REVIEW (${layout.currentPerMppt}A on assignment ${layout.mpptStringAssignment}; limits ${mpptLimitLabel} A — soft tolerance applied). `
+                : `Maximum Power Point Tracker (MPPT) Current Compatibility: YES (${layout.currentPerMppt}A on assignment ${layout.mpptStringAssignment}; limits ${mpptLimitLabel} A). `;
             const pvChecks =
+              modeNote +
+              matchNote +
               `Photovoltaic (PV) Voltage Compatibility: YES (cold open-circuit voltage / Voc ${layout.stringVocMax}V <= ${inv.mpptVocLimit}V). ` +
-              `Maximum Power Point Tracker (MPPT) Current Compatibility: YES (${layout.currentPerMppt}A <= ${inv.maxPvCurrent}A). ` +
+              mpptOkNote +
               `Photovoltaic (PV) Power Compatibility: YES (${layout.totalPvPowerW}W <= ${inv.maxPvPower}W). ` +
               `Battery Voltage Compatibility: YES (${vSys}V). ` +
               `Future Expansion Margin: ~${expansionPct}%.`;
@@ -153,11 +260,101 @@ export function runFullDesignCalculations(
               score,
               inverterReason: `${invRank.reason} ${pvChecks}`,
               minimumSizeKva: invRank.minimumSizeKva,
-              preferredSizeKva: invRank.preferredSizeKva
+              preferredSizeKva: invRank.preferredSizeKva,
+              catalogMatchMode
             });
           }
         }
       }
+    }
+  };
+
+  for (const vSys of candidateVoltages) {
+    const rankedInverters = searchCompatibleInverters(
+      vSys,
+      energyPlan.inverterConnectedLoadW,
+      energyPlan.inverterPeakLoadW,
+      inverterType,
+      catalogMarket
+    ).slice(0, 8);
+    pushCandidatesForInverters(vSys, rankedInverters, 'catalog');
+  }
+
+  // User datasheet inverter — real Voc/MPPT limits for protection math
+  if (designOptions.customInverter && designOptions.customInverter.sizeKva > 0) {
+    const custom = createInverterFromDatasheet(designOptions.customInverter);
+    const vSys = custom.voltageV;
+    if (candidateVoltages.includes(vSys) || systemVoltage === 'auto') {
+      const voltagesForCustom =
+        systemVoltage === 'auto' ? [vSys] : candidateVoltages.filter(v => v === vSys);
+      for (const v of voltagesForCustom.length ? voltagesForCustom : [vSys]) {
+        if (custom.voltageV !== v) continue;
+        const ranked: RankedInverter[] = [
+          {
+            inverter: custom,
+            minimumSizeKva: physics.minimumInverterKva,
+            preferredSizeKva: physics.preferredInverterKva,
+            validation: {
+              valid: true,
+              failures: [],
+              continuousLoadOk: custom.sizeKva * 1000 >= energyPlan.inverterConnectedLoadW,
+              peakLoadOk:
+                custom.sizeKva * 1000 * custom.surgeFactor >= energyPlan.inverterPeakLoadW,
+              batteryVoltageOk: true,
+              batteryCurrentOk: true
+            },
+            score: 200,
+            reason:
+              `Datasheet inverter ${custom.brand} ${custom.model} (${custom.sizeKva} kVA @ ${custom.voltageV}V). ` +
+              `MPPT Voc limit ${custom.mpptVocLimit}V · max PV current ${custom.maxPvCurrent}A · ` +
+              `max PV power ${custom.maxPvPower}W. Verify against manufacturer datasheet before procurement.`
+          }
+        ];
+        // Only push if electrically adequate for load
+        if (
+          ranked[0].validation.continuousLoadOk &&
+          ranked[0].validation.peakLoadOk
+        ) {
+          pushCandidatesForInverters(v, ranked, 'datasheet');
+        }
+      }
+    }
+  }
+
+  // Global fallback: if catalog has no adequate SKU (e.g. forced 12V on a 1.3 kW load),
+  // still publish physics sizes with a generic inverter so the tool is not catalog-locked.
+  if (candidates.length === 0) {
+    const topology = inverterType === 'off_grid' ? 'off_grid' : 'hybrid';
+    const fallbackVoltages =
+      systemVoltage === 'auto'
+        ? [physics.suggestedSystemVoltageV, 48, 24, 12].filter(
+            (v, i, arr) => arr.indexOf(v) === i
+          )
+        : candidateVoltages;
+
+    for (const vSys of fallbackVoltages) {
+      const gen = createGenericInverter(physics.requiredInverterKva, vSys, topology);
+      const ranked: RankedInverter[] = [
+        {
+          inverter: gen,
+          minimumSizeKva: physics.minimumInverterKva,
+          preferredSizeKva: physics.preferredInverterKva,
+          validation: {
+            valid: true,
+            failures: [],
+            continuousLoadOk: true,
+            peakLoadOk: true,
+            batteryVoltageOk: true,
+            batteryCurrentOk: true
+          },
+          score: 50,
+          reason:
+            `Engineering size ${gen.sizeKva} kVA @ ${vSys}V (no catalog SKU matched). ` +
+            `Required ~${physics.requiredInverterKva} kVA from load/surge. ` +
+            `Select any local brand meeting this rating and MPPT/battery current limits.`
+        }
+      ];
+      pushCandidatesForInverters(vSys, ranked, 'generic');
     }
   }
 
@@ -165,7 +362,11 @@ export function runFullDesignCalculations(
 
   if (candidates.length === 0) {
     throw new Error(
-      'Engineering Validation Failed: No compatible panel, inverter, and battery combination satisfies the electrical constraints with your current selections. Tip: set Inverter to Auto Recommend, System Voltage to Auto, and Panel to 550 Wp, then try again — or reduce motor/AC run hours.'
+      `Engineering sizing incomplete: could not form a valid panel + battery layout.\n` +
+        `Physics need (independent of brand): ~${physics.requiredInverterKva} kVA inverter, ` +
+        `~${physics.batteryTargetInstalledKwh} kWh battery, ~${physics.requiredArrayKwp} kWp PV.\n` +
+        `${physics.voltageGuidance}\n` +
+        `Tip: set System Voltage to Auto or ${physics.suggestedSystemVoltageV}V, Inverter to Auto, Panel to 550 Wp.`
     );
   }
 
@@ -175,6 +376,14 @@ export function runFullDesignCalculations(
   const inv = best.inverter;
   const resolvedSystemVoltage = best.systemVoltage;
   const inverterPowerW = inv.sizeKva * 1000;
+
+  const finalPlan = buildHybridEnergyPlan(
+    resolvedAppliances,
+    backupHours,
+    operatingMode,
+    batt.batteryEfficiency,
+    inv.efficiency
+  );
 
   const protectionRes = sizeProtectionDevices(
     best.panel.isc,
@@ -205,9 +414,8 @@ export function runFullDesignCalculations(
     batt.batteryDodUsed
   );
 
-  // Consistency audit — hard gate before report
   const audit = runConsistencyAudit({
-    appliances,
+    appliances: resolvedAppliances,
     dailyEnergyWh: loadRes.dailyEnergy,
     backupHours,
     batteryType,
@@ -227,8 +435,8 @@ export function runFullDesignCalculations(
     stringVocMax: layout.stringVocMax,
     stringIscMax: layout.stringIscMax,
     currentPerMppt: layout.currentPerMppt,
-    connectedLoadW: loadRes.connectedLoad,
-    peakLoadW: loadRes.peakLoad,
+    connectedLoadW: finalPlan.inverterConnectedLoadW,
+    peakLoadW: finalPlan.inverterPeakLoadW,
     batteryInverterDrawA: batt.batteryInverterDrawA,
     pvCableAreaMm2: cableRes.calculationsRaw.pvCableAreaMm2,
     batteryCableAreaMm2: cableRes.calculationsRaw.batteryCableAreaMm2,
@@ -251,8 +459,9 @@ export function runFullDesignCalculations(
   }
 
   const selfCheck = runSelfCheckEngine({
-    appliances,
+    appliances: resolvedAppliances,
     dailyEnergyWh: loadRes.dailyEnergy,
+    batterySizingDailyEnergyWh: finalPlan.batterySizingDailyEnergyWh,
     backupHours,
     systemVoltage: resolvedSystemVoltage,
     inverterEfficiency: inv.efficiency,
@@ -273,20 +482,66 @@ export function runFullDesignCalculations(
   const efficiencyFrac = best.overallEfficiency;
   const requiredArrayKwp =
     psh > 0 && efficiencyFrac > 0
-      ? (loadRes.dailyEnergy / 1000) / (psh * efficiencyFrac)
+      ? finalPlan.pvHarvestTargetWh / 1000 / (psh * efficiencyFrac)
       : solarArrayKw;
   const futureExpansionPercent = Math.max(
     0,
-    Math.round((1 - loadRes.connectedLoad / Math.max(inv.sizeKva * 1000, 1)) * 100)
+    Math.round((1 - finalPlan.inverterConnectedLoadW / Math.max(inv.sizeKva * 1000, 1)) * 100)
   );
   const voltageMarginV = (inv.mpptVocLimit || 0) - (layout.stringVocMax || 0);
-  const currentMarginA = (inv.maxPvCurrent || 0) - (layout.currentPerMppt || 0);
+  const currentMarginA = (layout.limitingMpptCurrentA || inv.maxPvCurrent || 0) - (layout.currentPerMppt || 0);
 
   const validationWarnings = [
     ...audit.warnings,
+    ...(layout.warnings || []).map(message => ({
+      level: 'warning' as const,
+      message,
+      suggestion:
+        'Confirm string-to-MPPT mapping and module Imp against the inverter datasheet before procurement.'
+    })),
+    {
+      level: 'info' as const,
+      message: `Physics-first need: ~${physics.requiredInverterKva} kVA inverter · ~${physics.batteryTargetInstalledKwh} kWh battery · ~${physics.requiredArrayKwp} kWp PV (before brand matching).`,
+      suggestion: physics.voltageGuidance
+    },
+    {
+      level: 'info' as const,
+      message: pshResolved.note,
+      suggestion:
+        'You can override peak sun hours on the client step, or use Lookup irradiance (NASA POWER) for a site estimate.'
+    },
+    ...(best.catalogMatchMode === 'generic'
+      ? [
+          {
+            level: 'warning' as const,
+            message:
+              'No catalog brand SKU matched your voltage/size. Showing engineering sizes — pick any local inverter/battery meeting these ratings. Enter datasheet specs on the inverter step for Voc/MPPT/fuse math against real limits.',
+            suggestion:
+              'Switch System Voltage to Auto, change Equipment market, or enter a datasheet inverter.'
+          }
+        ]
+      : []),
+    ...(best.catalogMatchMode === 'datasheet'
+      ? [
+          {
+            level: 'info' as const,
+            message:
+              'Inverter Voc / MPPT / battery current limits come from your entered datasheet. Confirm every value against the manufacturer PDF before procurement.',
+            suggestion: 'Keep the datasheet attached to the project folder for installation QA.'
+          }
+        ]
+      : []),
+    {
+      level: 'info' as const,
+      message: finalPlan.strategySummary,
+      suggestion:
+        operatingMode === 'hybrid_essentials'
+          ? 'Review each appliance’s load priority (Critical / Essential / Managed / Heavy) if the battery or PV size looks wrong.'
+          : 'Switch to Hybrid Night Essentials if the battery should only cover overnight Critical and Essential loads.'
+    },
     ...buildDesignNotes({
-      connectedLoadW: loadRes.connectedLoad,
-      peakLoadW: loadRes.peakLoad,
+      connectedLoadW: finalPlan.inverterConnectedLoadW,
+      peakLoadW: finalPlan.inverterPeakLoadW,
       inverterSizeKva: inv.sizeKva,
       estimatedDailyProductionKwh,
       dailyEnergyWh: loadRes.dailyEnergy,
@@ -310,6 +565,10 @@ export function runFullDesignCalculations(
   ];
 
   const assumptions = [
+    {
+      label: 'System Operating Mode',
+      value: operatingMode === 'hybrid_essentials' ? 'Hybrid Night Essentials' : 'Full Home Backup'
+    },
     { label: 'Meteorological Peak Sun Hours', value: psh, unit: 'hrs/day' },
     {
       label: 'Thermal Panel Derating Coefficient',
@@ -359,27 +618,40 @@ export function runFullDesignCalculations(
     {
       label: 'Cold Design Temperature (Voc)',
       value: SYSTEM_STANDARDS.minDesignTempC,
-      unit: '°C'
+      unit: 'degC'
     },
     {
       label: 'Hot Cell Temperature (Vmp)',
       value: SYSTEM_STANDARDS.maxCellTempC,
-      unit: '°C'
+      unit: 'degC'
     },
     {
       label: 'PV Cable Run Length',
-      value: cableRes.pvCableLengthM,
-      unit: cableRes.cableLengthsAssumed ? 'm (default assumed)' : 'm (site input)'
+      value: cableRes.pvLengthAssumed
+        ? `${cableRes.pvCableLengthM} m (default assumed)`
+        : `${cableRes.pvCableLengthM} m (site-entered)`
     },
     {
       label: 'Battery Cable Run Length',
-      value: cableRes.batteryCableLengthM,
-      unit: cableRes.cableLengthsAssumed ? 'm (default assumed)' : 'm (site input)'
+      value: cableRes.batteryLengthAssumed
+        ? `${cableRes.batteryCableLengthM} m (default assumed)`
+        : `${cableRes.batteryCableLengthM} m (site-entered)`
     },
     {
       label: 'AC Cable Run Length',
-      value: cableRes.acCableLengthM,
-      unit: cableRes.cableLengthsAssumed ? 'm (default assumed)' : 'm (site input)'
+      value: cableRes.acLengthAssumed
+        ? `${cableRes.acCableLengthM} m (default assumed)`
+        : `${cableRes.acCableLengthM} m (site-entered)`
+    },
+    {
+      label: 'Battery-backed daily energy (Critical + Essential)',
+      value: parseFloat((finalPlan.batteryBackedDailyEnergyWh / 1000).toFixed(2)),
+      unit: 'kWh/day'
+    },
+    {
+      label: 'Solar/grid-preferred daily energy (Managed + Heavy)',
+      value: parseFloat((finalPlan.solarGridPreferredDailyEnergyWh / 1000).toFixed(2)),
+      unit: 'kWh/day'
     }
   ];
 
@@ -403,7 +675,7 @@ export function runFullDesignCalculations(
     acCableSize: cableRes.acCableSize
   });
 
-  return {
+  const result: Calculations = {
     connectedLoad: loadRes.connectedLoad,
     peakLoad: loadRes.peakLoad,
     dailyEnergy: loadRes.dailyEnergy,
@@ -414,8 +686,18 @@ export function runFullDesignCalculations(
     batteryConfiguration: batt.batteryConfiguration,
     inverterSizeKva: inv.sizeKva,
     inverterReason: best.inverterReason,
+    inverterPreferredSizeKva: best.preferredSizeKva,
+    inverterMinimumSizeKva: best.minimumSizeKva,
+    engineeringRequiredInverterKva: physics.requiredInverterKva,
+    engineeringRequiredBatteryKwh: physics.batteryTargetInstalledKwh,
+    engineeringRequiredArrayKwp: physics.requiredArrayKwp,
+    suggestedSystemVoltageV: physics.suggestedSystemVoltageV,
+    voltageGuidance: physics.voltageGuidance,
+    catalogMatchMode: best.catalogMatchMode,
+    catalogMarket,
+    peakSunHoursSource: pshResolved.source,
+    peakSunHoursNote: pshResolved.note,
     solarArrayKw,
-    // Always publish exact S×P product (guards against stale total fields)
     panelQuantity: layout.seriesCount * layout.parallelCount,
     panelConfiguration: `${layout.seriesCount} Series × ${layout.parallelCount} Parallel · ${layout.seriesCount * layout.parallelCount} panels total`,
     estimatedDailyProductionKwh,
@@ -463,7 +745,9 @@ export function runFullDesignCalculations(
     mpptVmpMin: inv.mpptVmpMin,
     mpptVmpMax: inv.mpptVmpMax,
     currentPerMpptA: layout.currentPerMppt,
-    maxPvCurrentA: inv.maxPvCurrent,
+    maxPvCurrentA: layout.limitingMpptCurrentA || inv.maxPvCurrent,
+    mpptCurrentLimitsLabel: layout.mpptCurrentLimitsLabel || formatMpptCurrentLimits(inv),
+    mpptStringAssignment: layout.mpptStringAssignment,
     maxPvPowerW: inv.maxPvPower,
     seriesCount: layout.seriesCount,
     parallelCount: layout.parallelCount,
@@ -471,11 +755,10 @@ export function runFullDesignCalculations(
     stringsPerMppt: layout.stringsPerMppt,
     selectedPanelWattageWp: best.panel.sizeW,
     targetPvKw: parseFloat((best.targetPvWatts / 1000).toFixed(2)),
-    panelSizingCompatibilityOk: true,
+    requiredArrayKwp: parseFloat(requiredArrayKwp.toFixed(2)),
+    panelSizingCompatibilityOk: layout.panelSizingCompatibilityOk !== false,
     panelSizingCompatibilityWarning: layout.panelSizingCompatibilityWarning,
 
-    inverterPreferredSizeKva: best.preferredSizeKva,
-    inverterMinimumSizeKva: best.minimumSizeKva,
     inverterModelRecommended: `${inv.brand} ${inv.model}`,
 
     protectionSchedule: {
@@ -518,6 +801,38 @@ export function runFullDesignCalculations(
 
     validationWarnings,
     assumptions,
-    singleLineDiagramSvg: sldSvg
+    singleLineDiagramSvg: sldSvg,
+
+    operatingMode,
+    operatingModeLabel: finalPlan.operatingModeLabel,
+    energyStrategySummary: finalPlan.strategySummary,
+    systemGoal,
+    systemGoalLabel: goalSpec.title,
+    batteryBackedDailyEnergyKwh: parseFloat(
+      (finalPlan.batteryBackedDailyEnergyWh / 1000).toFixed(2)
+    ),
+    solarGridPreferredDailyEnergyKwh: parseFloat(
+      (finalPlan.solarGridPreferredDailyEnergyWh / 1000).toFixed(2)
+    ),
+    nightOrBackupEnergyKwh: parseFloat((finalPlan.nightOrBackupEnergyWh / 1000).toFixed(2)),
+    daytimeEnergyKwh: parseFloat((finalPlan.daytimeEnergyWh / 1000).toFixed(2)),
+    pvHarvestTargetKwh: parseFloat((finalPlan.pvHarvestTargetWh / 1000).toFixed(2)),
+    priorityEnergyBreakdown: {
+      criticalKwh: parseFloat((finalPlan.priorityBreakdown.criticalWh / 1000).toFixed(2)),
+      essentialKwh: parseFloat((finalPlan.priorityBreakdown.essentialWh / 1000).toFixed(2)),
+      managedKwh: parseFloat((finalPlan.priorityBreakdown.managedWh / 1000).toFixed(2)),
+      heavyKwh: parseFloat((finalPlan.priorityBreakdown.heavyWh / 1000).toFixed(2))
+    },
+    inverterDesignConnectedLoadW: finalPlan.inverterConnectedLoadW,
+    inverterDesignPeakLoadW: finalPlan.inverterPeakLoadW
   };
+
+  const cost = estimateSystemCostBand(result);
+  result.costEstimateNgnLow = cost.ngn.low;
+  result.costEstimateNgnHigh = cost.ngn.high;
+  result.costEstimateUsdLow = cost.usd.low;
+  result.costEstimateUsdHigh = cost.usd.high;
+  result.costEstimateDisclaimer = cost.disclaimer;
+
+  return result;
 }

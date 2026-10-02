@@ -14,7 +14,7 @@ import {
   sumApplianceDailyEnergyWh
 } from '../../lib/calculations/loadCalculator';
 import { parseInverterReasonPoints } from '../../lib/calculations/reportPresentation';
-import { Project, ProjectAppliance, BatteryType, SystemVoltage, InverterType, Calculations } from '../../types';
+import { Project, ProjectAppliance, BatteryType, SystemVoltage, InverterType, Calculations, OperatingMode, LoadPriority, DesignAudience, SystemGoal } from '../../types';
 import { EngineeringReport } from './EngineeringReport';
 import type { ReportPdfData } from '../../lib/exportReportPdf';
 import {
@@ -23,6 +23,30 @@ import {
   hasCompletedSizing,
   type ProjectStatus
 } from '../../lib/projectDraft';
+import {
+  defaultLoadPriority,
+  LOAD_PRIORITY_OPTIONS,
+  resolveLoadPriority,
+  resolveOperatingMode
+} from '../../lib/calculations/hybridEnergyModel';
+import {
+  DESIGN_AUDIENCE_OPTIONS,
+  SYSTEM_GOALS,
+  getSystemGoal,
+  resolveDesignAudience,
+  resolveSystemGoal
+} from '../../lib/calculations/systemGoals';
+import { estimateSystemCostBand, plainLanguageSystemSummary } from '../../lib/calculations/costEstimate';
+import {
+  CATALOG_MARKETS,
+  resolveCatalogMarket,
+  type CatalogMarketId
+} from '../../lib/calculations/catalogMarkets';
+import {
+  fetchNasaPowerPeakSunHours,
+  resolvePeakSunHours
+} from '../../lib/calculations/peakSunHours';
+import type { DatasheetInverterInput } from '../../lib/calculations/equipmentDatabase';
 
 interface ProjectWizardProps {
   projectToEdit?: Project | null;
@@ -41,6 +65,16 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
   const [clientEmail, setClientEmail] = useState('');
   const [location, setLocation] = useState('');
   const [projectType, setProjectType] = useState<'residential' | 'commercial'>('residential');
+  /** Simple home quote vs full engineering — default simple for medium customers. */
+  const [designAudience, setDesignAudience] = useState<DesignAudience>('simple');
+  /** Novice system goal — drives backup hours + hybrid vs full backup. */
+  const [systemGoal, setSystemGoal] = useState<SystemGoal>('overnight_essentials');
+  /** Equipment market pack for brand matching. */
+  const [catalogMarket, setCatalogMarket] = useState<CatalogMarketId>('global');
+  /** Manual peak sun hours override (blank = use city table / NASA). */
+  const [peakSunHoursOverride, setPeakSunHoursOverride] = useState('');
+  const [pshLookupNote, setPshLookupNote] = useState('');
+  const [isLookingUpPsh, setIsLookingUpPsh] = useState(false);
 
   // Step 2: Appliances State
   // List of appliances actively selected
@@ -55,10 +89,12 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
   const [customError, setCustomError] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
 
-  // Step 4: Backup Hours
+  // Step 4: Backup Hours + operating mode
   const [backupHours, setBackupHours] = useState<number>(8);
   const [customHours, setCustomHours] = useState<string>('');
   const [isCustomHours, setIsCustomHours] = useState(false);
+  /** Residential default: Hybrid Night Essentials (more realistic for medium homes). */
+  const [operatingMode, setOperatingMode] = useState<OperatingMode>('hybrid_essentials');
 
   // Step 5: Battery
   const [batteryType, setBatteryType] = useState<BatteryType>('lithium');
@@ -70,6 +106,19 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
   // Step 6: Inverter
   const [inverterType, setInverterType] = useState<InverterType>('auto');
+  const [useDatasheetInverter, setUseDatasheetInverter] = useState(false);
+  const [dsBrand, setDsBrand] = useState('');
+  const [dsModel, setDsModel] = useState('');
+  const [dsSizeKva, setDsSizeKva] = useState('');
+  const [dsVoltageV, setDsVoltageV] = useState('48');
+  const [dsMpptVoc, setDsMpptVoc] = useState('');
+  const [dsMpptVmpMin, setDsMpptVmpMin] = useState('');
+  const [dsMpptVmpMax, setDsMpptVmpMax] = useState('');
+  const [dsMaxPvCurrent, setDsMaxPvCurrent] = useState('');
+  const [dsMaxPvPower, setDsMaxPvPower] = useState('');
+  const [dsNumMppts, setDsNumMppts] = useState('2');
+  const [dsBattDischargeA, setDsBattDischargeA] = useState('');
+  const [dsSurgeFactor, setDsSurgeFactor] = useState('2');
 
   // Step 7: Solar Panels
   const [panelSize, setPanelSize] = useState<number>(550);
@@ -82,11 +131,74 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
   const reportIssuedAt = useMemo(() => new Date(), []);
   const designId = useMemo(() => {
-    const seed = `${projectName}|${clientName}|${location}|${backupHours}|${batteryType}|${systemVoltage}|${panelSize}|${appliancesList.length}`;
+    const seed = `${projectName}|${clientName}|${location}|${backupHours}|${batteryType}|${systemVoltage}|${panelSize}|${operatingMode}|${appliancesList.length}`;
     let hash = 0;
     for (let i = 0; i < seed.length; i++) hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0;
     return `VS-${reportIssuedAt.getFullYear()}-${Math.abs(hash % 9000) + 1000}`;
-  }, [projectName, clientName, location, backupHours, batteryType, systemVoltage, panelSize, appliancesList.length, reportIssuedAt]);
+  }, [projectName, clientName, location, backupHours, batteryType, systemVoltage, panelSize, operatingMode, appliancesList.length, reportIssuedAt]);
+
+  const applySystemGoal = (goalId: SystemGoal) => {
+    const goal = getSystemGoal(goalId);
+    setSystemGoal(goalId);
+    setOperatingMode(goal.operatingMode);
+    setBackupHours(goal.backupHours);
+    setIsCustomHours(false);
+    setCustomHours('');
+  };
+
+  const parsedPshOverride = (() => {
+    const n = parseFloat(peakSunHoursOverride);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+
+  const livePshPreview = useMemo(
+    () => resolvePeakSunHours(location, parsedPshOverride),
+    [location, parsedPshOverride]
+  );
+
+  const buildCustomInverterInput = (): DatasheetInverterInput | null => {
+    if (!useDatasheetInverter) return null;
+    const sizeKva = parseFloat(dsSizeKva);
+    const voltageV = parseInt(dsVoltageV, 10);
+    if (!Number.isFinite(sizeKva) || sizeKva <= 0 || ![12, 24, 48].includes(voltageV)) return null;
+    const num = (raw: string) => {
+      const v = parseFloat(raw);
+      return Number.isFinite(v) && v > 0 ? v : undefined;
+    };
+    return {
+      brand: dsBrand || 'Datasheet',
+      model: dsModel || `${sizeKva} kVA datasheet`,
+      sizeKva,
+      voltageV,
+      topology: inverterType === 'off_grid' ? 'off_grid' : 'hybrid',
+      mpptVocLimit: num(dsMpptVoc),
+      mpptVmpMin: num(dsMpptVmpMin),
+      mpptVmpMax: num(dsMpptVmpMax),
+      maxPvCurrent: num(dsMaxPvCurrent),
+      maxPvPower: num(dsMaxPvPower),
+      numMppts: num(dsNumMppts) ? Math.round(num(dsNumMppts)!) : undefined,
+      maxBatteryDischargeCurrentA: num(dsBattDischargeA),
+      surgeFactor: num(dsSurgeFactor)
+    };
+  };
+
+  const handleLookupIrradiance = async () => {
+    if (!location.trim()) {
+      window.alert('Enter an installation location first.');
+      return;
+    }
+    setIsLookingUpPsh(true);
+    setPshLookupNote('Looking up NASA POWER irradiance…');
+    try {
+      const result = await fetchNasaPowerPeakSunHours(location);
+      setPeakSunHoursOverride(String(result.peakSunHours));
+      setPshLookupNote(result.note);
+    } catch (err) {
+      setPshLookupNote(err instanceof Error ? err.message : 'Irradiance lookup failed.');
+    } finally {
+      setIsLookingUpPsh(false);
+    }
+  };
 
   // Populate data if editing / continuing a draft
   useEffect(() => {
@@ -104,7 +216,8 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
           ...app,
           customWattage: Math.max(0, Number(app.customWattage) || 0),
           quantity: Math.max(0, Number(app.quantity) || 0),
-          hoursUsed: Math.max(0, Number(app.hoursUsed) || 0)
+          hoursUsed: Math.max(0, Number(app.hoursUsed) || 0),
+          loadPriority: resolveLoadPriority(app)
         }))
       );
 
@@ -117,6 +230,26 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
         setCustomHours(hours.toString());
         setIsCustomHours(true);
       }
+
+      const calcs = projectToEdit.calculations as Calculations | undefined;
+      setOperatingMode(
+        resolveOperatingMode(
+          projectToEdit.operatingMode || calcs?.operatingMode
+        )
+      );
+      setDesignAudience(
+        resolveDesignAudience(projectToEdit.designAudience || calcs?.designAudience)
+      );
+      setSystemGoal(
+        resolveSystemGoal(projectToEdit.systemGoal || calcs?.systemGoal)
+      );
+      setCatalogMarket(
+        resolveCatalogMarket(calcs?.catalogMarket || (projectToEdit as Project & { catalogMarket?: string }).catalogMarket)
+      );
+      if (calcs?.peakSunHoursSource === 'manual_override' || calcs?.peakSunHoursSource === 'nasa_power') {
+        if (calcs.peakSunHoursUsed) setPeakSunHoursOverride(String(calcs.peakSunHoursUsed));
+      }
+      if (calcs?.peakSunHoursNote) setPshLookupNote(calcs.peakSunHoursNote);
 
       setBatteryType(projectToEdit.batteryType);
       setSystemVoltage(projectToEdit.systemVoltage);
@@ -190,7 +323,8 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
         customWattage: defaultApp.defaultWattage,
         quantity: 1,
         hoursUsed: 4, // default 4 hours per day
-        surgeMultiplier: defaultApp.surgeMultiplier
+        surgeMultiplier: defaultApp.surgeMultiplier,
+        loadPriority: defaultLoadPriority(defaultApp.applianceName)
       };
       setAppliancesList([...appliancesList, newApp]);
     }
@@ -202,6 +336,12 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
   const handleUpdateHours = (appId: string, hours: number) => {
     setAppliancesList(appliancesList.map(a => a.id === appId ? { ...a, hoursUsed: Math.min(24, Math.max(0.5, hours)) } : a));
+  };
+
+  const handleUpdatePriority = (appId: string, priority: LoadPriority) => {
+    setAppliancesList(
+      appliancesList.map(a => (a.id === appId ? { ...a, loadPriority: priority } : a))
+    );
   };
 
   const handleAddCustomAppliance = () => {
@@ -229,7 +369,8 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       customWattage: watts,
       quantity: qty,
       hoursUsed: hours,
-      surgeMultiplier: surge
+      surgeMultiplier: surge,
+      loadPriority: defaultLoadPriority(name)
     };
 
     setAppliancesList([...appliancesList, newApp]);
@@ -316,6 +457,13 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
           pvDistanceM: parseOptionalDistance(pvCableDistanceM),
           batteryDistanceM: parseOptionalDistance(batteryCableDistanceM),
           acDistanceM: parseOptionalDistance(acCableDistanceM)
+        },
+        operatingMode,
+        systemGoal,
+        {
+          catalogMarket,
+          peakSunHoursOverride: parsedPshOverride,
+          customInverter: buildCustomInverterInput()
         }
       );
       return { ...design, ...loadSnapshot };
@@ -354,9 +502,21 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       batteryType,
       systemVoltage,
       inverterType,
+      operatingMode,
+      designAudience,
+      systemGoal,
       panelSize,
       appliances: appliancesList,
-      calculations: attachWizardMeta(calcsForSave, { status, step }),
+      calculations: {
+        ...attachWizardMeta(calcsForSave, { status, step }),
+        operatingMode,
+        designAudience,
+        systemGoal,
+        systemGoalLabel: getSystemGoal(systemGoal).title,
+        catalogMarket,
+        peakSunHoursSource: livePshPreview.source,
+        peakSunHoursNote: pshLookupNote || livePshPreview.note
+      },
       status,
       wizardStep: step
     };
@@ -418,7 +578,11 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
       }
     }
     if (currentStep < totalSteps) {
-      const nextStep = currentStep + 1;
+      // Simple home quote: skip battery/inverter/panel detail steps (auto-selected)
+      let nextStep = currentStep + 1;
+      if (designAudience === 'simple' && currentStep === 4) {
+        nextStep = 8;
+      }
       const status: ProjectStatus = nextStep >= totalSteps ? 'complete' : 'draft';
       if (status === 'complete') reportAutoSavedRef.current = true;
       setCurrentStep(nextStep);
@@ -432,7 +596,11 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
   const handleBack = () => {
     if (currentStep > 1) {
-      setCurrentStep(currentStep - 1);
+      let prev = currentStep - 1;
+      if (designAudience === 'simple' && currentStep === 8) {
+        prev = 4;
+      }
+      setCurrentStep(prev);
     }
   };
 
@@ -489,7 +657,8 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
         panelSize,
         appliancesList,
         designId,
-        issuedAt: reportIssuedAt
+        issuedAt: reportIssuedAt,
+        designAudience
       };
       await exportReportPdf(payload, `${name}-VoltSolar-Report`);
     } catch (err) {
@@ -514,14 +683,14 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Step {currentStep} of {totalSteps} • {
-              currentStep === 1 ? 'Client Profiler' :
-              currentStep === 2 ? 'Appliance Load Entry' :
-              currentStep === 3 ? 'Load Calculation Summary' :
-              currentStep === 4 ? 'Backup Schedules' :
-              currentStep === 5 ? 'Battery Sizing Parameters' :
-              currentStep === 6 ? 'Inverter Sizing recommendation' :
-              currentStep === 7 ? 'Solar Array Grid sizing' :
-              'Completed Engineering Results'
+              currentStep === 1 ? 'Quote type & client' :
+              currentStep === 2 ? 'Appliances' :
+              currentStep === 3 ? 'Load summary' :
+              currentStep === 4 ? 'Backup strategy' :
+              currentStep === 5 ? 'Battery' :
+              currentStep === 6 ? 'Inverter' :
+              currentStep === 7 ? 'Solar panels' :
+              designAudience === 'simple' ? 'Home quote' : 'Engineering report'
             }
             {draftStatus ? (
               <span className="ml-2 text-[#69BD45] font-semibold">· {draftStatus}</span>
@@ -605,6 +774,62 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
               <User className="w-5 h-5 text-[#156DB7] mr-2" />
               <span>Client & Installation Details</span>
             </h2>
+
+            <div className="space-y-3 mb-2">
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                Who is this quote for?
+              </label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {DESIGN_AUDIENCE_OPTIONS.map(opt => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    id={`audience-${opt.id}`}
+                    onClick={() => setDesignAudience(opt.id)}
+                    className={`text-left p-4 border rounded-xl transition-all ${
+                      designAudience === opt.id
+                        ? 'border-[#156DB7] bg-slate-50 ring-1 ring-[#156DB7]/25'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <p className="text-sm font-bold text-slate-800">{opt.title}</p>
+                    <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{opt.desc}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3 mb-4">
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                What should the system do? (pick one)
+              </label>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {SYSTEM_GOALS.map(goal => (
+                  <button
+                    key={goal.id}
+                    type="button"
+                    id={`goal-${goal.id}`}
+                    onClick={() => applySystemGoal(goal.id)}
+                    className={`text-left p-4 border rounded-xl transition-all ${
+                      systemGoal === goal.id
+                        ? 'border-[#156DB7] bg-slate-50 ring-1 ring-[#156DB7]/25'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <p className="text-sm font-bold text-slate-800">{goal.title}</p>
+                    <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">{goal.plainSummary}</p>
+                    <p className="text-[10px] font-semibold text-[#156DB7] mt-2">{goal.whoItsFor}</p>
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                This sets backup hours to <span className="font-semibold">{backupHours} h</span> and mode to{' '}
+                <span className="font-semibold">
+                  {operatingMode === 'hybrid_essentials' ? 'Hybrid Night Essentials' : 'Full Home Backup'}
+                </span>
+                . You can fine-tune later if you choose Full engineering design.
+              </p>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
@@ -690,8 +915,80 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     value={location}
                     onChange={(e) => setLocation(e.target.value)}
                     className="block w-full pl-10 pr-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#156DB7] focus:border-transparent text-xs transition-all"
-                    placeholder="e.g. Austin, TX"
+                    placeholder="e.g. Lagos, Nigeria"
                   />
+                </div>
+              </div>
+
+              <div className="md:col-span-2 space-y-3 p-4 rounded-xl border border-slate-200 bg-slate-50/50">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Peak sun hours (irradiance)
+                </label>
+                <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+                  <div className="flex-1">
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      Manual override (hrs/day)
+                    </label>
+                    <input
+                      id="wiz-psh-override"
+                      type="number"
+                      min="1.5"
+                      max="8.5"
+                      step="0.1"
+                      value={peakSunHoursOverride}
+                      onChange={e => setPeakSunHoursOverride(e.target.value)}
+                      placeholder={`Auto: ${livePshPreview.peakSunHours}`}
+                      className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#156DB7]/30"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    id="wiz-psh-lookup"
+                    disabled={isLookingUpPsh || !location.trim()}
+                    onClick={() => void handleLookupIrradiance()}
+                    className="px-4 py-2.5 text-xs font-bold rounded-xl border border-[#156DB7]/30 text-[#156DB7] hover:bg-[#156DB7]/5 disabled:opacity-50"
+                  >
+                    {isLookingUpPsh ? 'Looking up…' : 'Lookup irradiance (NASA)'}
+                  </button>
+                  {peakSunHoursOverride ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPeakSunHoursOverride('');
+                        setPshLookupNote('');
+                      }}
+                      className="px-3 py-2.5 text-xs font-semibold text-slate-500 hover:text-slate-800"
+                    >
+                      Clear override
+                    </button>
+                  ) : null}
+                </div>
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  {pshLookupNote || livePshPreview.note}
+                </p>
+              </div>
+
+              <div className="md:col-span-2 space-y-2">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Equipment market (brand catalog)
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {CATALOG_MARKETS.map(m => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      id={`catalog-market-${m.id}`}
+                      onClick={() => setCatalogMarket(m.id)}
+                      className={`text-left p-3 border rounded-xl transition-all ${
+                        catalogMarket === m.id
+                          ? 'border-[#156DB7] bg-slate-50 ring-1 ring-[#156DB7]/20'
+                          : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <p className="text-xs font-bold text-slate-800">{m.title}</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5 leading-relaxed">{m.desc}</p>
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -989,6 +1286,26 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                             </div>
                           </div>
 
+                          <div>
+                            <label className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                              Load Priority (for Hybrid Night Essentials)
+                            </label>
+                            <select
+                              id={`app-priority-${app.id}`}
+                              value={resolveLoadPriority(app)}
+                              onChange={e =>
+                                handleUpdatePriority(app.id, e.target.value as LoadPriority)
+                              }
+                              className="w-full px-2 py-1.5 border border-slate-200 rounded bg-white text-xs text-slate-800 font-medium"
+                            >
+                              {LOAD_PRIORITY_OPTIONS.map(opt => (
+                                <option key={opt.id} value={opt.id}>
+                                  {opt.short} — {opt.hint}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
                           <div className="text-[10px] text-right font-semibold text-slate-500 pt-1 border-t border-slate-100/60">
                             Daily Sizing Load:{' '}
                             <span className="font-bold text-[#156DB7]">
@@ -1058,6 +1375,22 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
               </div>
             </div>
 
+            {!activeCalcs.isError && (activeCalcs.solarArrayKw || 0) > 0 && (() => {
+              const earlyCost = estimateSystemCostBand(activeCalcs);
+              const earlyPlain = plainLanguageSystemSummary(activeCalcs);
+              return (
+                <div className="mt-6 rounded-2xl border border-[#156DB7]/20 bg-gradient-to-br from-[#F0F7FC] to-white p-5 space-y-3">
+                  <p className="text-[10px] font-bold text-[#156DB7] uppercase tracking-widest">
+                    Early planning cost (based on current goal)
+                  </p>
+                  <p className="text-sm font-semibold text-slate-700">{earlyPlain.headline}</p>
+                  <p className="text-2xl font-black text-[#123A63] tracking-tight">{earlyCost.ngn.formatted}</p>
+                  <p className="text-xs font-semibold text-slate-500">{earlyCost.usd.formatted} · indicative only</p>
+                  <p className="text-[11px] text-slate-500 leading-relaxed">{earlyCost.disclaimer}</p>
+                </div>
+              );
+            })()}
+
             {/* Appliance Breakdown table */}
             <div className="mt-8 border-t border-slate-100 pt-6">
               <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-4">Connected Appliance Breakdowns</h3>
@@ -1099,12 +1432,65 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
           >
             <h2 className="text-base font-bold text-slate-800 flex items-center mb-6">
               <Battery className="w-5 h-5 text-[#156DB7] mr-2" />
-              <span>Configure Backup Run-Times</span>
+              <span>How Should the System Run? (Backup Strategy)</span>
             </h2>
 
             <div className="space-y-6">
+              <div className="space-y-3">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  System Operating Mode
+                </label>
+                <p className="text-xs text-slate-500 leading-relaxed max-w-2xl">
+                  This choice controls whether the battery is sized for the whole house or only for
+                  Critical and Essential loads at night / during outages. Solar can still power daytime
+                  loads in either mode.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl">
+                  <button
+                    type="button"
+                    id="op-mode-full-backup"
+                    onClick={() => setOperatingMode('full_backup')}
+                    className={`text-left p-4 border rounded-xl transition-all ${
+                      operatingMode === 'full_backup'
+                        ? 'border-[#156DB7] bg-slate-50/80 ring-1 ring-[#156DB7]/30'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <p className="text-sm font-bold text-slate-800">Full Home Backup</p>
+                    <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                      Battery covers average daily energy for your backup hours (closer to off-grid).
+                      Use when most appliances must stay on during an outage. This is the classic VoltSolar method.
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    id="op-mode-hybrid-essentials"
+                    onClick={() => setOperatingMode('hybrid_essentials')}
+                    className={`text-left p-4 border rounded-xl transition-all ${
+                      operatingMode === 'hybrid_essentials'
+                        ? 'border-[#156DB7] bg-slate-50/80 ring-1 ring-[#156DB7]/30'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <p className="text-sm font-bold text-slate-800">Hybrid Night Essentials</p>
+                    <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
+                      Solar / grid run Managed and Heavy loads by day. Battery is sized from Critical + Essential
+                      loads only for your backup hours (typical hybrid home with grid available).
+                    </p>
+                  </button>
+                </div>
+                {operatingMode === 'hybrid_essentials' && (
+                  <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 max-w-3xl leading-relaxed">
+                    Tip: check Load Priority on each appliance in Step 2. Cookers, kettles, heaters, and irons
+                    should usually be <span className="font-semibold">Heavy</span>. Freezers, lights, and fans
+                    should be <span className="font-semibold">Critical</span>.
+                  </p>
+                )}
+              </div>
+
               <p className="text-xs text-slate-500 leading-relaxed max-w-xl">
-                Select the target backup duration during which batteries must support continuous electrical loads without solar or grid charging inputs.
+                Select the target backup duration. In Full Home Backup this applies to total average daily energy.
+                In Hybrid Night Essentials it applies to Critical + Essential loads only.
               </p>
 
               <div>
@@ -1145,6 +1531,19 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                   />
                 </div>
               )}
+
+              {!activeCalcs.isError && (activeCalcs.solarArrayKw || 0) > 0 && (() => {
+                const stepCost = estimateSystemCostBand(activeCalcs);
+                return (
+                  <div className="rounded-2xl border border-[#156DB7]/20 bg-[#F0F7FC]/60 p-5 space-y-2">
+                    <p className="text-[10px] font-bold text-[#156DB7] uppercase tracking-widest">
+                      Cost band with this backup strategy
+                    </p>
+                    <p className="text-xl font-black text-[#123A63]">{stepCost.ngn.formatted}</p>
+                    <p className="text-xs text-slate-500">{stepCost.usd.formatted} · updates as you change hours or mode</p>
+                  </div>
+                );
+              })()}
             </div>
           </motion.div>
         )}
@@ -1197,7 +1596,12 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     { id: '24V', name: '24 VDC', desc: 'Standard residential 1 to 3 kW' },
                     { id: '48V', name: '48 VDC', desc: 'High-power layouts > 3 kW' },
                     { id: 'auto', name: 'Auto Recommend', desc: 'Automate system voltage' },
-                  ].map((v) => (
+                  ].map((v) => {
+                    const suggested = activeCalcs.suggestedSystemVoltageV;
+                    const isSuggested =
+                      (v.id === 'auto' && !!suggested) ||
+                      (suggested != null && v.id === `${suggested}V`);
+                    return (
                     <button
                       id={`sys-volt-${v.id}`}
                       key={v.id}
@@ -1205,11 +1609,40 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                       onClick={() => setSystemVoltage(v.id as SystemVoltage)}
                       className={`text-left p-4 border rounded-xl transition-all ${systemVoltage === v.id ? 'border-[#156DB7] bg-slate-50' : 'border-slate-200 hover:border-slate-300'}`}
                     >
-                      <h4 className="text-xs font-bold text-slate-800">{v.name}</h4>
+                      <h4 className="text-xs font-bold text-slate-800">
+                        {v.name}
+                        {isSuggested && v.id !== 'auto' ? (
+                          <span className="ml-1.5 text-[9px] font-bold text-[#156DB7]">· suggested</span>
+                        ) : null}
+                      </h4>
                       <p className="text-[10px] text-slate-400 mt-1">{v.desc}</p>
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
+
+                {activeCalcs.voltageGuidance ? (
+                  <p className="text-[11px] text-slate-600 leading-relaxed bg-[#F0F7FC] border border-[#156DB7]/15 rounded-lg px-3 py-2">
+                    {activeCalcs.voltageGuidance}
+                  </p>
+                ) : null}
+
+                {activeCalcs.engineeringRequiredInverterKva ? (
+                  <div className="p-3 bg-white rounded-xl border border-slate-200 space-y-1">
+                    <span className="text-[9px] font-bold text-[#156DB7] uppercase tracking-widest block">
+                      Engineering need (before brand)
+                    </span>
+                    <p className="text-xs font-semibold text-slate-800">
+                      ~{activeCalcs.engineeringRequiredInverterKva} kVA inverter
+                      {activeCalcs.engineeringRequiredBatteryKwh != null
+                        ? ` · ~${activeCalcs.engineeringRequiredBatteryKwh} kWh battery`
+                        : ''}
+                      {activeCalcs.engineeringRequiredArrayKwp != null
+                        ? ` · ~${activeCalcs.engineeringRequiredArrayKwp} kWp PV`
+                        : ''}
+                    </p>
+                  </div>
+                ) : null}
 
                 {/* Instant math output */}
                 <div className="p-4 bg-slate-50 rounded-xl border border-slate-100/60 space-y-2 mt-6">
@@ -1324,24 +1757,118 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     <ShieldCheck className="w-5 h-5 text-[#69BD45]" />
                     <span>VoltSolar Matching Recommendation</span>
                   </div>
+
+                  {activeCalcs.engineeringRequiredInverterKva != null ? (
+                    <div className="p-3 rounded-xl bg-white border border-slate-100">
+                      <span className="text-[10px] font-bold text-[#156DB7] uppercase tracking-wider">
+                        Engineering need (global)
+                      </span>
+                      <p className="text-lg font-extrabold text-slate-900 mt-0.5">
+                        ~{activeCalcs.engineeringRequiredInverterKva} kVA
+                      </p>
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Calculated from your loads first — brand matching comes after.
+                      </p>
+                    </div>
+                  ) : null}
                   
                   <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Recommended Capacity</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      {activeCalcs.catalogMatchMode === 'generic'
+                        ? 'Engineering size (no catalog SKU)'
+                        : activeCalcs.catalogMatchMode === 'datasheet'
+                          ? 'Datasheet-matched capacity'
+                          : 'Catalog-matched capacity'}
+                    </span>
                     <h3 className="text-3xl font-extrabold text-slate-900">{activeCalcs.inverterSizeKva.toFixed(1)} kVA / kW</h3>
                     {activeCalcs.inverterModelRecommended ? (
                       <p className="text-xs font-semibold text-slate-700 pt-1">{activeCalcs.inverterModelRecommended}</p>
                     ) : null}
+                    {activeCalcs.catalogMatchMode === 'generic' ? (
+                      <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
+                        Planning size only — enter datasheet specs below for Voc/MPPT/fuse verification, or change market/voltage.
+                      </p>
+                    ) : null}
+                    {activeCalcs.catalogMatchMode === 'datasheet' ? (
+                      <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 mt-2">
+                        Using your datasheet limits for string and protection checks. Confirm against the manufacturer PDF.
+                      </p>
+                    ) : null}
                   </div>
 
                   {(() => {
-                    const parsed = parseInverterReasonPoints(activeCalcs.inverterReason || '');
-                    if (!parsed.headline && parsed.items.length === 0) {
+                    const designConnectedW =
+                      activeCalcs.inverterDesignConnectedLoadW ?? activeCalcs.connectedLoad ?? 0;
+                    const designPeakW =
+                      activeCalcs.inverterDesignPeakLoadW ?? activeCalcs.peakLoad ?? 0;
+                    const rawKw = designConnectedW / 1000;
+                    const withSafetyKw = rawKw * 1.25;
+                    const peakKw = designPeakW / 1000;
+                    const minKva =
+                      activeCalcs.inverterMinimumSizeKva ??
+                      parseFloat(withSafetyKw.toFixed(2));
+
+                    if (rawKw <= 0 && peakKw <= 0) {
                       return (
                         <p className="text-xs text-slate-500 bg-white p-3.5 rounded-xl border border-slate-100">
-                          Complete earlier steps to see inverter matching details.
+                          Add appliances first to see the inverter sizing math.
                         </p>
                       );
                     }
+
+                    return (
+                      <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide px-3.5 py-2 border-b border-slate-100">
+                          How this capacity was calculated
+                        </p>
+                        <ol className="divide-y divide-slate-100 text-xs text-slate-800">
+                          <li className="px-3.5 py-2.5 flex justify-between gap-3">
+                            <span className="text-slate-600">
+                              1. Design connected load
+                              {activeCalcs.operatingMode === 'hybrid_essentials'
+                                ? ' (Critical + Essential + Managed)'
+                                : ' (all appliances)'}
+                            </span>
+                            <span className="font-bold shrink-0">{rawKw.toFixed(2)} kW</span>
+                          </li>
+                          <li className="px-3.5 py-2.5 flex justify-between gap-3">
+                            <span className="text-slate-600">
+                              2. Apply continuous safety factor (× 1.25)
+                            </span>
+                            <span className="font-bold shrink-0">
+                              {rawKw.toFixed(2)} × 1.25 = {withSafetyKw.toFixed(2)} kVA
+                            </span>
+                          </li>
+                          <li className="px-3.5 py-2.5 flex justify-between gap-3">
+                            <span className="text-slate-600">
+                              3. Peak demand (diversity + motor start surplus)
+                            </span>
+                            <span className="font-bold shrink-0">{peakKw.toFixed(2)} kW</span>
+                          </li>
+                          <li className="px-3.5 py-2.5 flex justify-between gap-3">
+                            <span className="text-slate-600">
+                              4. Minimum continuous target used for matching
+                            </span>
+                            <span className="font-bold text-[#156DB7] shrink-0">
+                              {minKva.toFixed(2)} kVA
+                            </span>
+                          </li>
+                          <li className="px-3.5 py-2.5 flex justify-between gap-3">
+                            <span className="text-slate-600">
+                              5. Selected commercial inverter (must also cover peak surge)
+                            </span>
+                            <span className="font-bold text-[#69BD45] shrink-0">
+                              {activeCalcs.inverterSizeKva.toFixed(1)} kVA
+                            </span>
+                          </li>
+                        </ol>
+                      </div>
+                    );
+                  })()}
+
+                  {(() => {
+                    const parsed = parseInverterReasonPoints(activeCalcs.inverterReason || '');
+                    if (!parsed.headline && parsed.items.length === 0) return null;
                     return (
                       <div className="bg-white rounded-xl border border-slate-100 overflow-hidden">
                         {parsed.headline ? (
@@ -1367,11 +1894,92 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                   })()}
                 </div>
 
-                <div className="p-4 bg-amber-50 rounded-xl border border-amber-100/50 flex items-start space-x-3 text-[10px] text-amber-800">
+                <div className="p-4 bg-amber-50 rounded-xl border border-amber-100/50 flex items-start space-x-3 text-[10px] text-amber-800 leading-relaxed">
                   <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  <span>The calculation applies a safety factor of 1.25× to peak reactive starting currents to secure structural inverter continuous ratings under thermal margins.</span>
+                  <span>
+                    The <span className="font-semibold">1.25× factor</span> is applied to the
+                    design <span className="font-semibold">connected load</span> (step 1 → 2 above)
+                    so the inverter has continuous headroom under heat. Peak demand is checked
+                    separately against the inverter’s surge capacity — it is not multiplied by 1.25.
+                  </span>
                 </div>
               </div>
+            </div>
+
+            <div className="mt-6 p-5 rounded-2xl border border-slate-200 bg-white space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">Datasheet inverter (optional)</h3>
+                  <p className="text-[11px] text-slate-500 mt-1 leading-relaxed max-w-xl">
+                    Enter manufacturer limits so Voc / MPPT / fuse math uses real datasheet values —
+                    required for global installs when the built-in catalog has no matching SKU.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  id="toggle-datasheet-inverter"
+                  onClick={() => setUseDatasheetInverter(v => !v)}
+                  className={`px-4 py-2 text-xs font-bold rounded-xl border transition-colors ${
+                    useDatasheetInverter
+                      ? 'border-[#156DB7] bg-[#156DB7]/10 text-[#156DB7]'
+                      : 'border-slate-200 text-slate-600 hover:border-slate-300'
+                  }`}
+                >
+                  {useDatasheetInverter ? 'Using datasheet specs' : 'Enter datasheet specs'}
+                </button>
+              </div>
+
+              {useDatasheetInverter && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {[
+                    { id: 'ds-brand', label: 'Brand', val: dsBrand, set: setDsBrand, ph: 'e.g. Deye' },
+                    { id: 'ds-model', label: 'Model', val: dsModel, set: setDsModel, ph: 'e.g. SUN-5K' },
+                    { id: 'ds-kva', label: 'Size (kVA) *', val: dsSizeKva, set: setDsSizeKva, ph: '5' },
+                    { id: 'ds-voc', label: 'MPPT Voc max (V)', val: dsMpptVoc, set: setDsMpptVoc, ph: '500' },
+                    { id: 'ds-vmpmin', label: 'MPPT Vmp min (V)', val: dsMpptVmpMin, set: setDsMpptVmpMin, ph: '120' },
+                    { id: 'ds-vmpmax', label: 'MPPT Vmp max (V)', val: dsMpptVmpMax, set: setDsMpptVmpMax, ph: '430' },
+                    { id: 'ds-ipv', label: 'Max PV current (A)', val: dsMaxPvCurrent, set: setDsMaxPvCurrent, ph: '14' },
+                    { id: 'ds-ppv', label: 'Max PV power (W)', val: dsMaxPvPower, set: setDsMaxPvPower, ph: '6500' },
+                    { id: 'ds-mppt', label: 'Number of MPPTs', val: dsNumMppts, set: setDsNumMppts, ph: '2' },
+                    { id: 'ds-ibat', label: 'Max batt discharge (A)', val: dsBattDischargeA, set: setDsBattDischargeA, ph: '120' },
+                    { id: 'ds-surge', label: 'Surge factor', val: dsSurgeFactor, set: setDsSurgeFactor, ph: '2' }
+                  ].map(f => (
+                    <div key={f.id}>
+                      <label className="block text-[10px] font-semibold text-slate-500 mb-1">{f.label}</label>
+                      <input
+                        id={f.id}
+                        type="text"
+                        value={f.val}
+                        onChange={e => f.set(e.target.value)}
+                        placeholder={f.ph}
+                        className="w-full px-2.5 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-[#156DB7]/25"
+                      />
+                    </div>
+                  ))}
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-500 mb-1">Battery voltage *</label>
+                    <select
+                      id="ds-voltage"
+                      value={dsVoltageV}
+                      onChange={e => setDsVoltageV(e.target.value)}
+                      className="w-full px-2.5 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-[#156DB7]/25"
+                    >
+                      <option value="12">12 V</option>
+                      <option value="24">24 V</option>
+                      <option value="48">48 V</option>
+                    </select>
+                  </div>
+                  {!buildCustomInverterInput() ? (
+                    <p className="col-span-2 md:col-span-4 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      Enter at least Size (kVA) and battery voltage to apply datasheet matching.
+                    </p>
+                  ) : activeCalcs.catalogMatchMode === 'datasheet' ? (
+                    <p className="col-span-2 md:col-span-4 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                      Datasheet inverter active — Voc/MPPT/protection use your entered limits. Confirm against the manufacturer PDF.
+                    </p>
+                  ) : null}
+                </div>
+              )}
             </div>
           </motion.div>
         )}
@@ -1504,6 +2112,7 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
               designId={designId}
               issuedAt={reportIssuedAt}
               onEditStep={setCurrentStep}
+              designAudience={designAudience}
             />
             </div>
 
@@ -1520,9 +2129,12 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     setClientEmail('');
                     setLocation('');
                     setProjectType('residential');
+                    setDesignAudience('simple');
+                    setSystemGoal('overnight_essentials');
                     setAppliancesList([]);
                     setBackupHours(8);
                     setIsCustomHours(false);
+                    setOperatingMode('hybrid_essentials');
                     setBatteryType('lithium');
                     setSystemVoltage('auto');
                     setInverterType('auto');
@@ -1599,9 +2211,11 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
               <span>
                 {isSavingProject
                   ? 'Saving draft…'
-                  : currentStep === totalSteps - 1
-                    ? 'Generate Report'
-                    : 'Continue'}
+                  : designAudience === 'simple' && currentStep === 4
+                    ? 'See home quote'
+                    : currentStep === totalSteps - 1
+                      ? 'Generate Report'
+                      : 'Continue'}
               </span>
               <ArrowRight className="w-4 h-4" />
             </button>

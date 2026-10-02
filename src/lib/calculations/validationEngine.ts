@@ -222,6 +222,8 @@ export function runConsistencyAudit(input: ConsistencyAuditInput): ConsistencyAu
 export function runSelfCheckEngine(params: {
   appliances: ProjectAppliance[];
   dailyEnergyWh: number;
+  /** Daily Wh used for battery sizing (may be Critical+Essential only in hybrid mode). */
+  batterySizingDailyEnergyWh?: number;
   backupHours: number;
   systemVoltage: number;
   inverterEfficiency: number;
@@ -243,8 +245,14 @@ export function runSelfCheckEngine(params: {
     );
   }
 
+  const batteryDailyWh =
+    typeof params.batterySizingDailyEnergyWh === 'number' &&
+    Number.isFinite(params.batterySizingDailyEnergyWh)
+      ? params.batterySizingDailyEnergyWh
+      : loadRecheck.dailyEnergy;
+
   const target = calculateBatteryEnergyTarget(
-    loadRecheck.dailyEnergy,
+    batteryDailyWh,
     params.backupHours,
     params.systemVoltage,
     params.inverterEfficiency,

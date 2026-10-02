@@ -1,14 +1,15 @@
-﻿import React from 'react';
+﻿import React, { useState } from 'react';
 import {
-  User, Zap, Battery, Sun, Cpu, ShieldCheck, AlertTriangle, Info, Edit, CheckCircle2
+  User, Zap, Battery, Sun, Cpu, ShieldCheck, AlertTriangle, Info, Edit, CheckCircle2, ChevronDown, ChevronUp
 } from 'lucide-react';
-import { Calculations, BatteryType, SystemVoltage, InverterType } from '../../types';
+import { Calculations, BatteryType, SystemVoltage, InverterType, DesignAudience } from '../../types';
 import {
   buildEngineeringReportMeta,
   getCableEngineeringRows,
   SOFTWARE_VERSION,
   CALCULATION_STANDARDS
 } from '../../lib/calculations/reportPresentation';
+import { estimateSystemCostBand, plainLanguageSystemSummary } from '../../lib/calculations/costEstimate';
 
 interface EngineeringReportProps {
   calcs: Calculations;
@@ -34,6 +35,8 @@ interface EngineeringReportProps {
   designId: string;
   issuedAt: Date;
   onEditStep: (step: number) => void;
+  /** Simple home quote collapses Voc/MPPT/protection tables by default. */
+  designAudience?: DesignAudience;
 }
 
 function StatusBadge({ status }: { status: 'PASS' | 'REVIEW' | 'FAIL' | 'CERTIFIED' | 'REVIEW REQUIRED' }) {
@@ -115,8 +118,12 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
   appliancesList,
   designId,
   issuedAt,
-  onEditStep
+  onEditStep,
+  designAudience = 'engineering'
 }) => {
+  const isSimple = designAudience === 'simple';
+  const [showEngineeringDetails, setShowEngineeringDetails] = useState(!isSimple);
+
   const resolvedV =
     (calcs.batteryUnitVoltage || 0) * (calcs.batterySeriesCount || 0) ||
     (systemVoltage === 'auto' ? 48 : parseInt(systemVoltage.replace('V', ''), 10));
@@ -131,6 +138,10 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
     designId,
     issuedAt
   });
+
+  const cost = estimateSystemCostBand(calcs);
+  const plain = plainLanguageSystemSummary(calcs);
+  const goalLabel = calcs.systemGoalLabel || 'Home backup';
 
   const cableRows = getCableEngineeringRows(calcs);
   const requiredBatt =
@@ -169,12 +180,16 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           <div className="flex items-center space-x-2.5">
             <span className="w-3.5 h-3.5 rounded-full bg-[#156DB7]" />
             <span className="font-mono text-[11px] font-bold uppercase tracking-widest text-[#156DB7]">
-              VOLTSOLAR® ENGINEERING DESIGN REPORT
+              {isSimple ? 'VOLTSOLAR® HOME SYSTEM QUOTE' : 'VOLTSOLAR® ENGINEERING DESIGN REPORT'}
             </span>
           </div>
-          <h2 className="text-2xl font-black text-[#123A63] mt-2 tracking-tight">SYSTEM DESIGN PROPOSAL</h2>
+          <h2 className="text-2xl font-black text-[#123A63] mt-2 tracking-tight">
+            {isSimple ? 'YOUR SOLAR BACKUP RECOMMENDATION' : 'SYSTEM DESIGN PROPOSAL'}
+          </h2>
           <p className="text-sm text-slate-600 mt-1">
-            Prepared to IEC 60364 / IEC 62548 / NEC Article 690 engineering practice.
+            {isSimple
+              ? 'Plain-language sizes and a planning cost range. Expand engineering details if your installer needs Voc / MPPT / cable schedules.'
+              : 'Prepared to IEC 60364 / IEC 62548 / NEC Article 690 engineering practice.'}
           </p>
         </div>
         <div className="text-left md:text-right space-y-1 bg-[#F7FAFC] border border-slate-200 rounded-xl px-4 py-3">
@@ -185,6 +200,52 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           </p>
           <div className="pt-1">
             <StatusBadge status={meta.overallStatus} />
+          </div>
+        </div>
+      </div>
+
+      {/* Plain-language summary + cost band first */}
+      <div className="py-8 border-b border-slate-200 space-y-5">
+        <div>
+          <p className="text-[11px] font-bold text-[#156DB7] uppercase tracking-widest mb-2">
+            In plain language
+          </p>
+          <h3 className="text-lg md:text-xl font-extrabold text-[#123A63] tracking-tight leading-snug">
+            {plain.headline}
+          </h3>
+          <p className="text-sm text-slate-600 mt-2">
+            Goal: <span className="font-semibold text-slate-800">{goalLabel}</span>
+            {' · '}
+            {backupHours} h backup window
+          </p>
+          <ul className="mt-3 space-y-1.5">
+            {plain.bullets.map(b => (
+              <li key={b} className="text-[13px] text-slate-600 leading-relaxed flex gap-2">
+                <span className="text-[#156DB7] font-bold shrink-0">•</span>
+                <span>{b}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="rounded-2xl border border-[#156DB7]/25 bg-gradient-to-br from-[#F0F7FC] to-white p-5 md:p-6">
+          <p className="text-[11px] font-bold text-[#156DB7] uppercase tracking-widest">
+            Estimated installed cost (planning range)
+          </p>
+          <p className="text-2xl md:text-3xl font-black text-[#123A63] mt-2 tracking-tight">
+            {cost.ngn.formatted}
+          </p>
+          <p className="text-sm font-semibold text-slate-600 mt-1">{cost.usd.formatted} USD equivalent</p>
+          <p className="text-[11px] text-slate-500 mt-3 leading-relaxed max-w-2xl">{cost.disclaimer}</p>
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {cost.components.map(c => (
+              <div key={c.label} className="text-[11px] text-slate-600 flex justify-between gap-3 bg-white/70 border border-slate-100 rounded-lg px-3 py-2">
+                <span className="font-medium">{c.label}</span>
+                <span className="font-bold text-slate-800 shrink-0 whitespace-nowrap">
+                  ₦{Math.round(c.ngnLow / 1000).toLocaleString()}k – ₦{Math.round(c.ngnHigh / 1000).toLocaleString()}k
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -311,6 +372,61 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
         )}
       </div>
 
+      {/* Operating strategy — novice-friendly day/night explanation */}
+      <div className="py-8 border-b border-slate-100">
+        <h3 className="text-sm font-bold text-[#123A63] tracking-tight flex items-center mb-4">
+          <Sun className="w-4 h-4 text-amber-500 mr-1.5" />
+          <span>2b. System Operating Mode (Day / Night Energy Strategy)</span>
+        </h3>
+        <div className="p-4 rounded-2xl border border-slate-200 bg-[#F7FAFC] space-y-3 max-w-3xl">
+          <p className="text-sm font-extrabold text-slate-800">
+            {calcs.operatingModeLabel ||
+              (calcs.operatingMode === 'hybrid_essentials'
+                ? 'Hybrid Night Essentials'
+                : 'Full Home Backup')}
+          </p>
+          <p className="text-[12px] text-slate-600 leading-relaxed">
+            {calcs.energyStrategySummary ||
+              'Battery sized from average daily energy over the selected backup hours (Full Home Backup).'}
+          </p>
+          {calcs.priorityEnergyBreakdown && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2">
+              {[
+                { l: 'Critical', v: calcs.priorityEnergyBreakdown.criticalKwh },
+                { l: 'Essential', v: calcs.priorityEnergyBreakdown.essentialKwh },
+                { l: 'Managed', v: calcs.priorityEnergyBreakdown.managedKwh },
+                { l: 'Heavy', v: calcs.priorityEnergyBreakdown.heavyKwh }
+              ].map(row => (
+                <div key={row.l} className="p-2.5 rounded-xl bg-white border border-slate-100">
+                  <span className="text-[10px] font-semibold text-slate-500 block">{row.l}</span>
+                  <p className="text-sm font-bold text-slate-800 mt-0.5">{row.v.toFixed(2)} kWh/day</p>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+            <div className="p-2.5 rounded-xl bg-white border border-slate-100">
+              <span className="text-slate-500 font-semibold block">Night / backup budget</span>
+              <p className="font-bold text-slate-800 mt-0.5">
+                {(calcs.nightOrBackupEnergyKwh ?? 0).toFixed(2)} kWh
+              </p>
+            </div>
+            <div className="p-2.5 rounded-xl bg-white border border-slate-100">
+              <span className="text-slate-500 font-semibold block">Daytime (solar / grid)</span>
+              <p className="font-bold text-slate-800 mt-0.5">
+                {(calcs.daytimeEnergyKwh ?? 0).toFixed(2)} kWh
+              </p>
+            </div>
+            <div className="p-2.5 rounded-xl bg-white border border-slate-100">
+              <span className="text-slate-500 font-semibold block">PV harvest target</span>
+              <p className="font-bold text-[#156DB7] mt-0.5">
+                {(calcs.pvHarvestTargetKwh ?? 0).toFixed(2)} kWh/day
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Hardware overview cards */}
       <div className="py-8 border-b border-slate-100">
         <h3 className="text-sm font-bold text-[#123A63] tracking-tight flex items-center mb-6">
@@ -350,6 +466,32 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
         </div>
       </div>
 
+      {/* Engineering details toggle — Voc/MPPT/protection/cables stay behind this for home quotes */}
+      <div className="py-6 border-b border-slate-100 print:hidden">
+        <button
+          type="button"
+          id="toggle-engineering-details"
+          onClick={() => setShowEngineeringDetails(v => !v)}
+          className="w-full flex items-center justify-between gap-3 px-4 py-3.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
+        >
+          <div>
+            <p className="text-sm font-bold text-slate-800">
+              {showEngineeringDetails ? 'Hide engineering details' : 'Show engineering details'}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Voc / MPPT windows, battery math, protection devices, cable schedule, and validation tables
+            </p>
+          </div>
+          {showEngineeringDetails ? (
+            <ChevronUp className="w-5 h-5 text-[#156DB7] shrink-0" />
+          ) : (
+            <ChevronDown className="w-5 h-5 text-[#156DB7] shrink-0" />
+          )}
+        </button>
+      </div>
+
+      {showEngineeringDetails && (
+      <>
       {/* Battery explanation */}
       <div className="py-8 border-b border-slate-100">
         <div className="flex justify-between items-start mb-4">
@@ -365,7 +507,11 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           <ReasonBlock
             title="Required Battery Energy"
             value={`${requiredBatt.toFixed(2)} kWh`}
-            reason={`Required to sustain the selected ${backupHours}-hour backup duration at the customer's average daily load profile.`}
+            reason={
+              calcs.operatingMode === 'hybrid_essentials'
+                ? `Required to sustain the selected ${backupHours}-hour backup for Critical + Essential loads only (Hybrid Night Essentials). Managed and Heavy loads prefer solar / grid and are not in this battery night budget.`
+                : `Required to sustain the selected ${backupHours}-hour backup duration at the customer's average daily load profile (Full Home Backup).`
+            }
           />
           <ReasonBlock
             title="Installed Battery Capacity"
@@ -518,7 +664,11 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
                 hot-weather Vmp ~ <span className="font-mono font-bold">{calcs.stringVmpHot ?? '—'} V</span>
                 {' · '}
                 current ~ <span className="font-mono font-bold">{calcs.currentPerMpptA ?? '—'} A</span>
-                {calcs.maxPvCurrentA != null ? <> / limit {calcs.maxPvCurrentA} A</> : null}.
+                {calcs.mpptCurrentLimitsLabel || calcs.maxPvCurrentA != null ? (
+                  <> / limits {calcs.mpptCurrentLimitsLabel || calcs.maxPvCurrentA} A</>
+                ) : null}
+                {calcs.mpptStringAssignment ? <> (assignment {calcs.mpptStringAssignment})</> : null}
+                .
               </p>
               <p className="text-slate-700">{meta.mpptMappingDescription}</p>
               <p className="text-slate-500">
@@ -792,7 +942,8 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
                   <div key={idx} className="flex justify-between items-center px-4 py-2.5 text-xs">
                     <span className="text-slate-600 font-semibold">{item.label}</span>
                     <span className="font-mono font-bold text-slate-700">
-                      {item.value} {item.unit}
+                      {item.value}
+                      {item.unit != null && String(item.unit).trim() !== '' ? ` ${item.unit}` : ''}
                     </span>
                   </div>
                 ))}
@@ -845,6 +996,14 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
         <SectionHeading>B. Design Inputs</SectionHeading>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-1 bg-[#F7FAFC] border border-slate-200 rounded-2xl p-5 md:p-6">
           <DotRow label="Backup Time" value={`${backupHours} Hours`} />
+          <DotRow
+            label="System Operating Mode"
+            value={
+              calcs.operatingMode === 'hybrid_essentials'
+                ? 'Hybrid Night Essentials'
+                : 'Full Home Backup'
+            }
+          />
           <DotRow label="Battery Chemistry" value={meta.chemistryLabel} />
           <DotRow
             label="Nominal System Voltage"
@@ -912,6 +1071,8 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           </div>
         </div>
       </div>
+      </>
+      )}
 
       {/* Footer */}
       <div className="mt-8 pt-6 border-t-2 border-[#156DB7]/20 grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
