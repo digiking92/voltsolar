@@ -6,7 +6,8 @@ import {
   InverterSpecs,
   formatMpptCurrentLimits,
   createGenericInverter,
-  createInverterFromDatasheet
+  createInverterFromDatasheet,
+  findInverterInCatalog
 } from './equipmentDatabase';
 import { SYSTEM_STANDARDS } from './engineeringStandards';
 import { resolvePeakSunHours } from './peakSunHours';
@@ -278,6 +279,48 @@ export function runFullDesignCalculations(
       catalogMarket
     ).slice(0, 8);
     pushCandidatesForInverters(vSys, rankedInverters, 'catalog');
+  }
+
+  // Engineer picked a specific company-catalogue SKU from the datasheet drawer
+  const prefCat = designOptions.preferredCatalogInverter;
+  if (prefCat?.brand && prefCat?.model && !designOptions.customInverter) {
+    const forced = findInverterInCatalog(prefCat.brand, prefCat.model, catalogMarket);
+    if (forced) {
+      const vSys = forced.voltageV;
+      const voltageOk =
+        systemVoltage === 'auto' || candidateVoltages.includes(vSys);
+      if (voltageOk) {
+        const continuousOk = forced.sizeKva * 1000 >= energyPlan.inverterConnectedLoadW;
+        const peakOk =
+          forced.sizeKva * 1000 * forced.surgeFactor >= energyPlan.inverterPeakLoadW;
+        if (continuousOk && peakOk) {
+          pushCandidatesForInverters(
+            vSys,
+            [
+              {
+                inverter: forced,
+                minimumSizeKva: physics.minimumInverterKva,
+                preferredSizeKva: physics.preferredInverterKva,
+                validation: {
+                  valid: true,
+                  failures: [],
+                  continuousLoadOk: continuousOk,
+                  peakLoadOk: peakOk,
+                  batteryVoltageOk: true,
+                  batteryCurrentOk: true
+                },
+                score: 400,
+                reason:
+                  `Catalogue selection: ${forced.brand} ${forced.model} (${forced.sizeKva} kVA @ ${forced.voltageV}V). ` +
+                  `Datasheet limits from company catalogue — Voc ${forced.mpptVocLimit}V, ` +
+                  `PV ${forced.maxPvCurrent}A / ${forced.maxPvPower}W.`
+              }
+            ],
+            'catalog'
+          );
+        }
+      }
+    }
   }
 
   // User datasheet inverter — real Voc/MPPT limits for protection math
@@ -760,6 +803,8 @@ export function runFullDesignCalculations(
     panelSizingCompatibilityWarning: layout.panelSizingCompatibilityWarning,
 
     inverterModelRecommended: `${inv.brand} ${inv.model}`,
+    inverterBrandRecommended: inv.brand,
+    inverterModelNameRecommended: inv.model,
 
     protectionSchedule: {
       dcStringFuse: protectionRes.dcStringFuse,

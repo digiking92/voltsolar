@@ -46,7 +46,10 @@ import {
   fetchNasaPowerPeakSunHours,
   resolvePeakSunHours
 } from '../../lib/calculations/peakSunHours';
-import type { DatasheetInverterInput } from '../../lib/calculations/equipmentDatabase';
+import {
+  InverterDatasheetDrawer,
+  type InverterDatasheetSelection
+} from './InverterDatasheetDrawer';
 
 interface ProjectWizardProps {
   projectToEdit?: Project | null;
@@ -106,19 +109,9 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
 
   // Step 6: Inverter
   const [inverterType, setInverterType] = useState<InverterType>('auto');
-  const [useDatasheetInverter, setUseDatasheetInverter] = useState(false);
-  const [dsBrand, setDsBrand] = useState('');
-  const [dsModel, setDsModel] = useState('');
-  const [dsSizeKva, setDsSizeKva] = useState('');
-  const [dsVoltageV, setDsVoltageV] = useState('48');
-  const [dsMpptVoc, setDsMpptVoc] = useState('');
-  const [dsMpptVmpMin, setDsMpptVmpMin] = useState('');
-  const [dsMpptVmpMax, setDsMpptVmpMax] = useState('');
-  const [dsMaxPvCurrent, setDsMaxPvCurrent] = useState('');
-  const [dsMaxPvPower, setDsMaxPvPower] = useState('');
-  const [dsNumMppts, setDsNumMppts] = useState('2');
-  const [dsBattDischargeA, setDsBattDischargeA] = useState('');
-  const [dsSurgeFactor, setDsSurgeFactor] = useState('2');
+  const [datasheetDrawerOpen, setDatasheetDrawerOpen] = useState(false);
+  const [inverterDatasheetSelection, setInverterDatasheetSelection] =
+    useState<InverterDatasheetSelection>({ mode: 'auto' });
 
   // Step 7: Solar Panels
   const [panelSize, setPanelSize] = useState<number>(550);
@@ -155,32 +148,6 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
     () => resolvePeakSunHours(location, parsedPshOverride),
     [location, parsedPshOverride]
   );
-
-  const buildCustomInverterInput = (): DatasheetInverterInput | null => {
-    if (!useDatasheetInverter) return null;
-    const sizeKva = parseFloat(dsSizeKva);
-    const voltageV = parseInt(dsVoltageV, 10);
-    if (!Number.isFinite(sizeKva) || sizeKva <= 0 || ![12, 24, 48].includes(voltageV)) return null;
-    const num = (raw: string) => {
-      const v = parseFloat(raw);
-      return Number.isFinite(v) && v > 0 ? v : undefined;
-    };
-    return {
-      brand: dsBrand || 'Datasheet',
-      model: dsModel || `${sizeKva} kVA datasheet`,
-      sizeKva,
-      voltageV,
-      topology: inverterType === 'off_grid' ? 'off_grid' : 'hybrid',
-      mpptVocLimit: num(dsMpptVoc),
-      mpptVmpMin: num(dsMpptVmpMin),
-      mpptVmpMax: num(dsMpptVmpMax),
-      maxPvCurrent: num(dsMaxPvCurrent),
-      maxPvPower: num(dsMaxPvPower),
-      numMppts: num(dsNumMppts) ? Math.round(num(dsNumMppts)!) : undefined,
-      maxBatteryDischargeCurrentA: num(dsBattDischargeA),
-      surgeFactor: num(dsSurgeFactor)
-    };
-  };
 
   const handleLookupIrradiance = async () => {
     if (!location.trim()) {
@@ -463,7 +430,14 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
         {
           catalogMarket,
           peakSunHoursOverride: parsedPshOverride,
-          customInverter: buildCustomInverterInput()
+          customInverter:
+            inverterDatasheetSelection.mode === 'custom'
+              ? inverterDatasheetSelection.customInverter
+              : null,
+          preferredCatalogInverter:
+            inverterDatasheetSelection.mode === 'catalogue'
+              ? inverterDatasheetSelection.preferredCatalog
+              : null
         }
       );
       return { ...design, ...loadSnapshot };
@@ -1794,14 +1768,35 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
                     {activeCalcs.inverterModelRecommended ? (
                       <p className="text-xs font-semibold text-slate-700 pt-1">{activeCalcs.inverterModelRecommended}</p>
                     ) : null}
+                    {designAudience === 'engineering' ? (
+                      <button
+                        type="button"
+                        id="open-inverter-datasheet"
+                        onClick={() => setDatasheetDrawerOpen(true)}
+                        className="mt-2 text-[11px] font-bold text-[#156DB7] hover:underline"
+                      >
+                        View catalogue datasheet →
+                      </button>
+                    ) : (
+                      <p className="text-[10px] text-slate-400 mt-2">
+                        Switch to Full engineering design to inspect catalogue datasheets.
+                      </p>
+                    )}
                     {activeCalcs.catalogMatchMode === 'generic' ? (
                       <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
-                        Planning size only — enter datasheet specs below for Voc/MPPT/fuse verification, or change market/voltage.
+                        Planning size only — open the datasheet panel to pick a catalogue SKU or enter custom limits.
                       </p>
                     ) : null}
                     {activeCalcs.catalogMatchMode === 'datasheet' ? (
                       <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 mt-2">
-                        Using your datasheet limits for string and protection checks. Confirm against the manufacturer PDF.
+                        Custom datasheet active — Voc/MPPT/protection use your entered limits.
+                      </p>
+                    ) : null}
+                    {inverterDatasheetSelection.mode === 'catalogue' &&
+                    inverterDatasheetSelection.preferredCatalog ? (
+                      <p className="text-[11px] text-[#0F5288] bg-[#F0F7FC] border border-[#156DB7]/20 rounded-lg px-2.5 py-1.5 mt-2">
+                        Catalogue override: {inverterDatasheetSelection.preferredCatalog.brand}{' '}
+                        {inverterDatasheetSelection.preferredCatalog.model}
                       </p>
                     ) : null}
                   </div>
@@ -1916,81 +1911,42 @@ export const ProjectWizard: React.FC<ProjectWizardProps> = ({ projectToEdit, onC
               </div>
             </div>
 
-            <div className="mt-6 p-5 rounded-2xl border border-slate-200 bg-white space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-800">Datasheet inverter (optional)</h3>
-                  <p className="text-[11px] text-slate-500 mt-1 leading-relaxed max-w-xl">
-                    Enter manufacturer limits so Voc / MPPT / fuse math uses real datasheet values —
-                    required for global installs when the built-in catalog has no matching SKU.
-                  </p>
-                </div>
+            {designAudience === 'engineering' ? (
+              <p className="mt-4 text-[11px] text-slate-500">
+                Need datasheet details?{' '}
                 <button
                   type="button"
-                  id="toggle-datasheet-inverter"
-                  onClick={() => setUseDatasheetInverter(v => !v)}
-                  className={`px-4 py-2 text-xs font-bold rounded-xl border transition-colors ${
-                    useDatasheetInverter
-                      ? 'border-[#156DB7] bg-[#156DB7]/10 text-[#156DB7]'
-                      : 'border-slate-200 text-slate-600 hover:border-slate-300'
-                  }`}
+                  onClick={() => setDatasheetDrawerOpen(true)}
+                  className="font-bold text-[#156DB7] hover:underline"
                 >
-                  {useDatasheetInverter ? 'Using datasheet specs' : 'Enter datasheet specs'}
+                  Open inverter datasheet panel
                 </button>
-              </div>
+              </p>
+            ) : null}
 
-              {useDatasheetInverter && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {[
-                    { id: 'ds-brand', label: 'Brand', val: dsBrand, set: setDsBrand, ph: 'e.g. Deye' },
-                    { id: 'ds-model', label: 'Model', val: dsModel, set: setDsModel, ph: 'e.g. SUN-5K' },
-                    { id: 'ds-kva', label: 'Size (kVA) *', val: dsSizeKva, set: setDsSizeKva, ph: '5' },
-                    { id: 'ds-voc', label: 'MPPT Voc max (V)', val: dsMpptVoc, set: setDsMpptVoc, ph: '500' },
-                    { id: 'ds-vmpmin', label: 'MPPT Vmp min (V)', val: dsMpptVmpMin, set: setDsMpptVmpMin, ph: '120' },
-                    { id: 'ds-vmpmax', label: 'MPPT Vmp max (V)', val: dsMpptVmpMax, set: setDsMpptVmpMax, ph: '430' },
-                    { id: 'ds-ipv', label: 'Max PV current (A)', val: dsMaxPvCurrent, set: setDsMaxPvCurrent, ph: '14' },
-                    { id: 'ds-ppv', label: 'Max PV power (W)', val: dsMaxPvPower, set: setDsMaxPvPower, ph: '6500' },
-                    { id: 'ds-mppt', label: 'Number of MPPTs', val: dsNumMppts, set: setDsNumMppts, ph: '2' },
-                    { id: 'ds-ibat', label: 'Max batt discharge (A)', val: dsBattDischargeA, set: setDsBattDischargeA, ph: '120' },
-                    { id: 'ds-surge', label: 'Surge factor', val: dsSurgeFactor, set: setDsSurgeFactor, ph: '2' }
-                  ].map(f => (
-                    <div key={f.id}>
-                      <label className="block text-[10px] font-semibold text-slate-500 mb-1">{f.label}</label>
-                      <input
-                        id={f.id}
-                        type="text"
-                        value={f.val}
-                        onChange={e => f.set(e.target.value)}
-                        placeholder={f.ph}
-                        className="w-full px-2.5 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-[#156DB7]/25"
-                      />
-                    </div>
-                  ))}
-                  <div>
-                    <label className="block text-[10px] font-semibold text-slate-500 mb-1">Battery voltage *</label>
-                    <select
-                      id="ds-voltage"
-                      value={dsVoltageV}
-                      onChange={e => setDsVoltageV(e.target.value)}
-                      className="w-full px-2.5 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-[#156DB7]/25"
-                    >
-                      <option value="12">12 V</option>
-                      <option value="24">24 V</option>
-                      <option value="48">48 V</option>
-                    </select>
-                  </div>
-                  {!buildCustomInverterInput() ? (
-                    <p className="col-span-2 md:col-span-4 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                      Enter at least Size (kVA) and battery voltage to apply datasheet matching.
-                    </p>
-                  ) : activeCalcs.catalogMatchMode === 'datasheet' ? (
-                    <p className="col-span-2 md:col-span-4 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                      Datasheet inverter active — Voc/MPPT/protection use your entered limits. Confirm against the manufacturer PDF.
-                    </p>
-                  ) : null}
-                </div>
-              )}
-            </div>
+            <InverterDatasheetDrawer
+              open={datasheetDrawerOpen && designAudience === 'engineering'}
+              onClose={() => setDatasheetDrawerOpen(false)}
+              catalogMarket={catalogMarket}
+              recommendedDisplayName={activeCalcs.inverterModelRecommended}
+              recommendedBrand={activeCalcs.inverterBrandRecommended}
+              recommendedModel={activeCalcs.inverterModelNameRecommended}
+              catalogMatchMode={activeCalcs.catalogMatchMode}
+              selection={inverterDatasheetSelection}
+              onApply={sel => {
+                if (sel.mode === 'custom' && sel.customInverter) {
+                  setInverterDatasheetSelection({
+                    ...sel,
+                    customInverter: {
+                      ...sel.customInverter,
+                      topology: inverterType === 'off_grid' ? 'off_grid' : 'hybrid'
+                    }
+                  });
+                } else {
+                  setInverterDatasheetSelection(sel);
+                }
+              }}
+            />
           </motion.div>
         )}
 

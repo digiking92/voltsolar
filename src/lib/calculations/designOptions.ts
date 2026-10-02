@@ -14,4 +14,9 @@ export interface DesignCalculationOptions {
   customInverter?: DatasheetInverterInput | null;
   /** Prefer datasheet inverter over catalog when both pass. Default true if custom set. */
   preferCustomInverter?: boolean;
+  /**
+   * Force a company-catalogue SKU (brand + model). Used when engineer picks
+   * another catalogue unit from the datasheet drawer.
+   */
+  preferredCatalogInverter?: { brand: string; model: string } | null;
 }

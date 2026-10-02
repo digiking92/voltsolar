@@ -257,6 +257,88 @@ export function getAllInverters(market: CatalogMarketId = 'global'): InverterSpe
   return merged.filter(inv => inverterInMarket(inv.regions, market));
 }
 
+export function inverterDisplayName(inv: Pick<InverterSpecs, 'brand' | 'model'>): string {
+  return `${inv.brand} ${inv.model}`;
+}
+
+/** Look up a catalogue SKU by brand + model (exact, then fuzzy). */
+export function findInverterInCatalog(
+  brand: string,
+  model: string,
+  market: CatalogMarketId = 'global'
+): InverterSpecs | null {
+  const all = getAllInverters(market);
+  const b = brand.trim().toLowerCase();
+  const m = model.trim().toLowerCase();
+  const exact = all.find(
+    i => i.brand.toLowerCase() === b && i.model.toLowerCase() === m
+  );
+  if (exact) return exact;
+  return (
+    all.find(
+      i =>
+        i.brand.toLowerCase() === b &&
+        (i.model.toLowerCase().includes(m) || m.includes(i.model.toLowerCase()))
+    ) || null
+  );
+}
+
+/** Resolve catalogue row from "Brand Model" display string or separate fields. */
+export function findInverterByDisplayName(
+  displayName: string | undefined | null,
+  market: CatalogMarketId = 'global',
+  brandHint?: string,
+  modelHint?: string
+): InverterSpecs | null {
+  if (brandHint && modelHint) {
+    const hit = findInverterInCatalog(brandHint, modelHint, market);
+    if (hit) return hit;
+  }
+  const name = (displayName || '').trim();
+  if (!name) return null;
+  const all = getAllInverters(market);
+  const exact = all.find(i => inverterDisplayName(i) === name);
+  if (exact) return exact;
+  // Prefer longest model match
+  const ranked = [...all].sort((a, b) => b.model.length - a.model.length);
+  return ranked.find(i => name.includes(i.model) && name.includes(i.brand)) || null;
+}
+
+export function listInverterBrands(market: CatalogMarketId = 'global'): string[] {
+  const brands = new Set(getAllInverters(market).map(i => i.brand));
+  return Array.from(brands).sort((a, b) => a.localeCompare(b));
+}
+
+export function listInvertersForBrand(
+  brand: string,
+  market: CatalogMarketId = 'global'
+): InverterSpecs[] {
+  return getAllInverters(market)
+    .filter(i => i.brand === brand)
+    .sort((a, b) => a.sizeKva - b.sizeKva || a.model.localeCompare(b.model));
+}
+
+export function datasheetRowsFromInverter(inv: InverterSpecs): { label: string; value: string }[] {
+  return [
+    { label: 'Brand', value: inv.brand },
+    { label: 'Model', value: inv.model },
+    { label: 'Rated size', value: `${inv.sizeKva} kVA` },
+    { label: 'Battery / DC bus', value: `${inv.voltageV} V` },
+    { label: 'Topology', value: inv.topology.replace('_', '-') },
+    { label: 'Phases', value: String(inv.phases) },
+    { label: 'MPPT Voc max', value: `${inv.mpptVocLimit} V` },
+    { label: 'MPPT Vmp window', value: `${inv.mpptVmpMin} – ${inv.mpptVmpMax} V` },
+    { label: 'Max PV current', value: `${inv.maxPvCurrent} A` },
+    { label: 'Max PV power', value: `${inv.maxPvPower} W` },
+    { label: 'Number of MPPTs', value: String(inv.numMppts) },
+    { label: 'Strings per MPPT (max)', value: String(inv.maxStringsPerMppt) },
+    { label: 'Battery charge current max', value: `${inv.maxBatteryChargeCurrentA} A` },
+    { label: 'Battery discharge current max', value: `${inv.maxBatteryDischargeCurrentA} A` },
+    { label: 'Surge factor', value: `${inv.surgeFactor}×` },
+    { label: 'Efficiency', value: `${Math.round(inv.efficiency * 100)}%` }
+  ];
+}
+
 export const INVERTERS: InverterSpecs[] = [
   // --- 12 V / 24 V all-in-one (real integrated MPPT) — NOT Victron MultiPlus (no PV MPPT) ---
   {

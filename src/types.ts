@@ -165,6 +165,8 @@ export interface Calculations {
   inverterPreferredSizeKva?: number;
   inverterMinimumSizeKva?: number;
   inverterModelRecommended?: string;
+  inverterBrandRecommended?: string;
+  inverterModelNameRecommended?: string;
   /** Physics-first commercial inverter size (kVA) before brand matching. */
   engineeringRequiredInverterKva?: number;
   /** Physics-first battery installed target (kWh, lithium-class planning). */
