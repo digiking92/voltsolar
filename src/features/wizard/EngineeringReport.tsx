@@ -102,6 +102,50 @@ function DotRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Collapsible detail — closed on screen, always open when printing so PDFs stay complete. */
+function KnowMore({
+  id,
+  title,
+  children,
+  defaultOpen = false,
+  hint
+}: {
+  id: string;
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  hint?: string;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="mt-3 rounded-xl border border-slate-200 bg-white overflow-hidden">
+      <button
+        type="button"
+        id={id}
+        onClick={() => setOpen(v => !v)}
+        className="print:hidden w-full flex items-center justify-between gap-3 px-3.5 py-2.5 text-left hover:bg-slate-50 transition-colors"
+        aria-expanded={open}
+      >
+        <div className="min-w-0">
+          <p className="text-[12px] font-bold text-[#156DB7]">{open ? 'Hide details' : 'Know more'}</p>
+          <p className="text-[11px] text-slate-600 mt-0.5 truncate">{title}</p>
+          {hint && !open ? (
+            <p className="text-[10px] text-slate-400 mt-0.5">{hint}</p>
+          ) : null}
+        </div>
+        {open ? (
+          <ChevronUp className="w-4 h-4 text-[#156DB7] shrink-0" />
+        ) : (
+          <ChevronDown className="w-4 h-4 text-[#156DB7] shrink-0" />
+        )}
+      </button>
+      <div className={`${open ? 'block' : 'hidden'} print:block border-t border-slate-100 px-3.5 py-3`}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export const EngineeringReport: React.FC<EngineeringReportProps> = ({
   calcs,
   projectName,
@@ -280,14 +324,18 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             <FieldLabel>Site Location</FieldLabel>
             <p className="text-sm font-semibold text-slate-900 mt-1">{location || 'Unspecified Location'}</p>
           </div>
-          <div>
-            <FieldLabel>Contact Phone</FieldLabel>
-            <p className="text-sm font-medium text-slate-700 mt-1">{clientPhone || 'None Provided'}</p>
-          </div>
-          <div>
-            <FieldLabel>Contact Email</FieldLabel>
-            <p className="text-sm font-medium text-slate-700 mt-1">{clientEmail || 'None Provided'}</p>
-          </div>
+          {clientPhone.trim() ? (
+            <div>
+              <FieldLabel>Contact Phone</FieldLabel>
+              <p className="text-sm font-medium text-slate-700 mt-1">{clientPhone}</p>
+            </div>
+          ) : null}
+          {clientEmail.trim() ? (
+            <div>
+              <FieldLabel>Contact Email</FieldLabel>
+              <p className="text-sm font-medium text-slate-700 mt-1">{clientEmail}</p>
+            </div>
+          ) : null}
           <div>
             <FieldLabel>Project Classification</FieldLabel>
             <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-bold bg-[#156DB7]/10 text-[#0F5288] mt-1 capitalize">
@@ -364,10 +412,18 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
                 <p className="text-base font-extrabold text-[#69BD45]">{calcs.monthlyEnergy.toFixed(1)} kWh</p>
               </div>
             </div>
-            <p className="mt-3 text-[11px] text-slate-600 leading-relaxed max-w-3xl">
-              <span className="font-semibold text-slate-800">How peak demand is calculated: </span>
-              {meta.peakDemandDerivation}
-            </p>
+            <KnowMore
+              id="know-peak-demand"
+              title="How peak demand is calculated"
+              hint="Diversity factor and motor starting surplus"
+            >
+              <p className="text-[11px] text-slate-600 leading-relaxed">
+                {meta.peakDemandDerivation}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
+                Total Connected Load is the sum of appliance rated watts — not continuous operating load.
+              </p>
+            </KnowMore>
           </div>
         )}
       </div>
@@ -386,24 +442,10 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
                 : 'Full Home Backup')}
           </p>
           <p className="text-[12px] text-slate-600 leading-relaxed">
-            {calcs.energyStrategySummary ||
-              'Battery sized from average daily energy over the selected backup hours (Full Home Backup).'}
+            {calcs.operatingMode === 'hybrid_essentials'
+              ? 'Solar / grid cover most daytime loads; the battery backs Critical + Essential loads at night or during outages.'
+              : 'Battery is sized from average daily energy over your selected backup hours (full-home style).'}
           </p>
-          {calcs.priorityEnergyBreakdown && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2">
-              {[
-                { l: 'Critical', v: calcs.priorityEnergyBreakdown.criticalKwh },
-                { l: 'Essential', v: calcs.priorityEnergyBreakdown.essentialKwh },
-                { l: 'Managed', v: calcs.priorityEnergyBreakdown.managedKwh },
-                { l: 'Heavy', v: calcs.priorityEnergyBreakdown.heavyKwh }
-              ].map(row => (
-                <div key={row.l} className="p-2.5 rounded-xl bg-white border border-slate-100">
-                  <span className="text-[10px] font-semibold text-slate-500 block">{row.l}</span>
-                  <p className="text-sm font-bold text-slate-800 mt-0.5">{row.v.toFixed(2)} kWh/day</p>
-                </div>
-              ))}
-            </div>
-          )}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
             <div className="p-2.5 rounded-xl bg-white border border-slate-100">
               <span className="text-slate-500 font-semibold block">Night / backup budget</span>
@@ -424,6 +466,31 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
               </p>
             </div>
           </div>
+          <KnowMore
+            id="know-operating-mode"
+            title="Load priorities and energy strategy detail"
+            hint="Critical / Essential / Managed / Heavy split"
+          >
+            <p className="text-[12px] text-slate-600 leading-relaxed mb-3">
+              {calcs.energyStrategySummary ||
+                'Battery sized from average daily energy over the selected backup hours (Full Home Backup).'}
+            </p>
+            {calcs.priorityEnergyBreakdown ? (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {[
+                  { l: 'Critical', v: calcs.priorityEnergyBreakdown.criticalKwh },
+                  { l: 'Essential', v: calcs.priorityEnergyBreakdown.essentialKwh },
+                  { l: 'Managed', v: calcs.priorityEnergyBreakdown.managedKwh },
+                  { l: 'Heavy', v: calcs.priorityEnergyBreakdown.heavyKwh }
+                ].map(row => (
+                  <div key={row.l} className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
+                    <span className="text-[10px] font-semibold text-slate-500 block">{row.l}</span>
+                    <p className="text-sm font-bold text-slate-800 mt-0.5">{row.v.toFixed(2)} kWh/day</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </KnowMore>
         </div>
       </div>
 
@@ -575,15 +642,20 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             </p>
           </div>
         </div>
-        <div className="mt-4 p-4 rounded-xl bg-[#F7FAFC] border border-slate-200/80 space-y-2">
-          <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Why this battery bank was selected</p>
-          {meta.selectionJustifications.battery.map(row => (
-            <div key={row.label} className="flex flex-col sm:flex-row sm:gap-3 text-[12px]">
-              <span className="font-semibold text-slate-600 sm:w-[40%] shrink-0">{row.label}</span>
-              <span className="text-slate-800">{row.value}</span>
-            </div>
-          ))}
-        </div>
+        <KnowMore
+          id="know-battery-why"
+          title="Why this battery bank was selected"
+          hint="Backup hours, DoD, reserves, and SKU choice"
+        >
+          <div className="space-y-2">
+            {meta.selectionJustifications.battery.map(row => (
+              <div key={row.label} className="flex flex-col sm:flex-row sm:gap-3 text-[12px]">
+                <span className="font-semibold text-slate-600 sm:w-[40%] shrink-0">{row.label}</span>
+                <span className="text-slate-800">{row.value}</span>
+              </div>
+            ))}
+          </div>
+        </KnowMore>
       </div>
 
       {/* PV Array explanation */}
@@ -605,20 +677,25 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           <DotRow label="Engineering Margin" value={`${meta.engineeringMarginPercent}%`} />
           <DotRow label="Final Recommendation" value={`${calcs.solarArrayKw} kWp`} />
         </div>
-        <p className="text-[11px] text-slate-500 leading-relaxed max-w-2xl">
-          Required array = Daily Energy ÷ (Peak Sun Hours × System Efficiency). The final recommendation is the nearest
-          electrically valid string configuration that meets or exceeds this target using commercial panel ratings
-          ({panelWpActual} Wp modules, {calcs.panelQuantity} panels, {calcs.panelConfiguration}).
-        </p>
-        <div className="mt-4 p-4 rounded-xl bg-[#F7FAFC] border border-slate-200/80 space-y-2 max-w-2xl">
-          <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Why this PV array was selected</p>
-          {meta.selectionJustifications.pv.map(row => (
-            <div key={row.label} className="flex flex-col sm:flex-row sm:gap-3 text-[12px]">
-              <span className="font-semibold text-slate-600 sm:w-[40%] shrink-0">{row.label}</span>
-              <span className="text-slate-800">{row.value}</span>
-            </div>
-          ))}
-        </div>
+        <KnowMore
+          id="know-pv-why"
+          title="Why this PV array was selected"
+          hint="Harvest target, string fit, and engineering margin"
+        >
+          <p className="text-[11px] text-slate-500 leading-relaxed mb-3">
+            Required array = PV harvest target ÷ (Peak Sun Hours × System Efficiency). The final recommendation is the
+            nearest electrically valid string configuration that meets or exceeds this target using commercial panel
+            ratings ({panelWpActual} Wp modules, {calcs.panelQuantity} panels, {calcs.panelConfiguration}).
+          </p>
+          <div className="space-y-2">
+            {meta.selectionJustifications.pv.map(row => (
+              <div key={row.label} className="flex flex-col sm:flex-row sm:gap-3 text-[12px]">
+                <span className="font-semibold text-slate-600 sm:w-[40%] shrink-0">{row.label}</span>
+                <span className="text-slate-800">{row.value}</span>
+              </div>
+            ))}
+          </div>
+        </KnowMore>
       </div>
 
       {/* Inverter explanation */}
@@ -637,53 +714,45 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             <span className="text-[11px] font-semibold text-slate-600 tracking-wide block">Selected Inverter</span>
             <p className="text-base font-extrabold text-slate-800">{calcs.inverterModelRecommended}</p>
             <p className="text-sm font-bold text-[#156DB7]">{calcs.inverterSizeKva} kVA · {meta.topologyLabel}</p>
-            <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-3">
-              <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Why this inverter was selected</p>
-              {meta.selectionJustifications.inverter.map(row => (
-                <div key={row.label} className="flex flex-col sm:flex-row sm:gap-2 text-[11px] py-1 border-b border-slate-50 last:border-0">
-                  <span className="font-semibold text-slate-600 sm:w-[42%] shrink-0">{row.label}</span>
-                  <span className="text-slate-800">{row.value}</span>
-                </div>
-              ))}
-            </div>
-            <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-100 text-[11px] text-slate-600 leading-relaxed space-y-1.5">
-              <p className="font-bold text-slate-800">Maximum Power Point Tracker (MPPT) / charge controller</p>
-              {inverterType === 'off_grid' ? (
-                <p>
-                  This off-grid pick is an <span className="font-semibold">all-in-one (AIO) with built-in Maximum Power Point Tracker (MPPT)</span>.
-                  You do <span className="font-semibold">not</span> need a separate solar charge controller for this design —
-                  photovoltaic (PV) strings connect to the unit’s PV/MPPT terminals.
+            <p className="text-[11px] text-slate-500 mt-2">
+              Built-in MPPT · cold Voc {calcs.stringVocMax ?? '—'} V
+              {calcs.mpptVocLimit != null ? ` / max ${calcs.mpptVocLimit} V` : ''}
+              {calcs.mpptStringAssignment ? ` · strings ${calcs.mpptStringAssignment}` : ''}
+            </p>
+            <KnowMore
+              id="know-inverter-why"
+              title="Why this inverter was selected + MPPT detail"
+              hint="Load fit, surge, Voc/current checks"
+            >
+              <div className="space-y-1.5">
+                {meta.selectionJustifications.inverter.map(row => (
+                  <div key={row.label} className="flex flex-col sm:flex-row sm:gap-2 text-[11px] py-1 border-b border-slate-50 last:border-0">
+                    <span className="font-semibold text-slate-600 sm:w-[42%] shrink-0">{row.label}</span>
+                    <span className="text-slate-800">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 p-3 rounded-xl bg-slate-50 border border-slate-100 text-[11px] text-slate-600 leading-relaxed space-y-1.5">
+                <p className="font-bold text-slate-800">Maximum Power Point Tracker (MPPT) / charge controller</p>
+                {inverterType === 'off_grid' ? (
+                  <p>
+                    This off-grid pick is an all-in-one with built-in MPPT. A separate solar charge controller is not
+                    required — PV strings connect to the unit’s PV/MPPT terminals.
+                  </p>
+                ) : (
+                  <p>
+                    This hybrid / all-in-one includes built-in MPPT. A separate MPPT is not required for this design.
+                  </p>
+                )}
+                <p className="text-slate-700">{meta.mpptMappingDescription}</p>
+                <p className="text-slate-500">
+                  Only if you swap to a bare inverter/charger without PV input: buy an external MPPT with Voc class
+                  above cold string Voc (≥{' '}
+                  {calcs.stringVocMax ? Math.ceil(Number(calcs.stringVocMax) / 50) * 50 : '—'} V), battery voltage{' '}
+                  {resolvedV} V, and charge current ≥ ~{(calcs.batteryMaxChargeCurrentA ?? 0).toFixed(0)} A.
                 </p>
-              ) : (
-                <p>
-                  This recommendation uses a <span className="font-semibold">hybrid / all-in-one with built-in Maximum Power Point Tracker (MPPT)</span>.
-                  You do <span className="font-semibold">not</span> buy a separate MPPT for the array in this design.
-                </p>
-              )}
-              <p>
-                <span className="font-semibold">Array → Maximum Power Point Tracker (MPPT) window: </span>
-                cold open-circuit voltage (Voc) ≤ <span className="font-mono font-bold">{calcs.stringVocMax ?? '—'} V</span>
-                {calcs.mpptVocLimit != null ? <> (inverter max {calcs.mpptVocLimit} V)</> : null}
-                {' · '}
-                Standard Test Condition (STC) string maximum power voltage (Vmp) ~ <span className="font-mono font-bold">{calcs.stringVmpMax ?? '—'} V</span>
-                {' · '}
-                hot-weather Vmp ~ <span className="font-mono font-bold">{calcs.stringVmpHot ?? '—'} V</span>
-                {' · '}
-                current ~ <span className="font-mono font-bold">{calcs.currentPerMpptA ?? '—'} A</span>
-                {calcs.mpptCurrentLimitsLabel || calcs.maxPvCurrentA != null ? (
-                  <> / limits {calcs.mpptCurrentLimitsLabel || calcs.maxPvCurrentA} A</>
-                ) : null}
-                {calcs.mpptStringAssignment ? <> (assignment {calcs.mpptStringAssignment})</> : null}
-                .
-              </p>
-              <p className="text-slate-700">{meta.mpptMappingDescription}</p>
-              <p className="text-slate-500">
-                Only if you swap to a bare inverter/charger <span className="italic">without</span> PV input: buy an external
-                Maximum Power Point Tracker (MPPT) with Voc class above cold string Voc
-                (≥ {calcs.stringVocMax ? Math.ceil(Number(calcs.stringVocMax) / 50) * 50 : '—'} V),
-                battery voltage {resolvedV} V, and charge current ≥ ~{(calcs.batteryMaxChargeCurrentA ?? 0).toFixed(0)} A.
-              </p>
-            </div>
+              </div>
+            </KnowMore>
           </div>
           <div className="p-4 border border-slate-100 rounded-2xl">
             <span className="text-[11px] font-semibold text-slate-600 tracking-wide block mb-3">Validation Checklist</span>
@@ -759,21 +828,28 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
         </div>
         <p className="text-[11px] text-slate-500 mt-3">
           Layout: {calcs.seriesCount ?? '-'} series × {calcs.parallelCount ?? '-'} parallel ({calcs.panelQuantity} panels
-          × {panelWpActual} watts-peak). {meta.mpptMappingDescription}
+          × {panelWpActual} watts-peak).
         </p>
-        {meta.pvMarginNotes.length > 0 && (
-          <div className="mt-4 space-y-2">
-            {meta.pvMarginNotes.map(note => (
-              <div
-                key={note}
-                className="p-3 rounded-xl border border-amber-100 bg-amber-50/50 text-[12px] text-amber-950 leading-relaxed"
-              >
-                <span className="font-bold text-amber-800">Engineering note: </span>
-                {note}
-              </div>
-            ))}
-          </div>
-        )}
+        {meta.pvMarginNotes.length > 0 ? (
+          <KnowMore
+            id="know-pv-margin-notes"
+            title="Engineering notes on string voltage / current headroom"
+            hint={`${meta.pvMarginNotes.length} note${meta.pvMarginNotes.length === 1 ? '' : 's'}`}
+          >
+            <div className="space-y-2">
+              <p className="text-[11px] text-slate-600 leading-relaxed">{meta.mpptMappingDescription}</p>
+              {meta.pvMarginNotes.map(note => (
+                <div
+                  key={note}
+                  className="p-3 rounded-xl border border-amber-100 bg-amber-50/50 text-[12px] text-amber-950 leading-relaxed"
+                >
+                  <span className="font-bold text-amber-800">Engineering note: </span>
+                  {note}
+                </div>
+              ))}
+            </div>
+          </KnowMore>
+        ) : null}
       </div>
 
       {/* SLD */}
@@ -795,10 +871,16 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
           <ShieldCheck className="w-4 h-4 text-emerald-500 mr-1.5" />
           <span>9. Protection Device Schedule</span>
         </h3>
-        <p className="text-[12px] text-slate-600 mb-3 leading-relaxed max-w-3xl">
-          {meta.selectionJustifications.protection}
-        </p>
-        <div className="overflow-x-auto border border-slate-100 rounded-2xl bg-white">
+        <KnowMore
+          id="know-protection-method"
+          title="How protection devices are sized"
+          hint="IEC / NEC safety factors and rounding rules"
+        >
+          <p className="text-[12px] text-slate-600 leading-relaxed">
+            {meta.selectionJustifications.protection}
+          </p>
+        </KnowMore>
+        <div className="mt-3 overflow-x-auto border border-slate-100 rounded-2xl bg-white">
           <table className="w-full text-left text-xs text-slate-700">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100 text-[11px] font-semibold text-slate-600 tracking-wide">
@@ -938,144 +1020,174 @@ export const EngineeringReport: React.FC<EngineeringReportProps> = ({
             </div>
           </div>
           <div>
-            <h4 className="text-sm font-bold text-[#123A63] tracking-tight mb-4 flex items-center">
+            <h4 className="text-sm font-bold text-[#123A63] tracking-tight mb-2 flex items-center">
               <Info className="w-4 h-4 text-[#156DB7] mr-1.5" />
               <span>12. Calculation Assumptions</span>
             </h4>
-            <div className="border border-slate-100 rounded-2xl overflow-hidden bg-white">
-              <div className="divide-y divide-slate-100">
-                {(calcs.assumptions || []).map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center px-4 py-2.5 text-xs">
-                    <span className="text-slate-600 font-semibold">{item.label}</span>
-                    <span className="font-mono font-bold text-slate-700">
-                      {item.value}
-                      {item.unit != null && String(item.unit).trim() !== '' ? ` ${item.unit}` : ''}
-                    </span>
+            <p className="text-[11px] text-slate-500 mb-2">
+              Peak sun hours, derating, DoD, cable lengths, and related constants.
+            </p>
+            <KnowMore
+              id="know-assumptions"
+              title="Full assumptions table"
+              hint={`${(calcs.assumptions || []).length} values`}
+            >
+              <div className="border border-slate-100 rounded-xl overflow-hidden bg-white">
+                <div className="divide-y divide-slate-100">
+                  {(calcs.assumptions || []).map((item, idx) => (
+                    <div key={idx} className="flex justify-between items-center px-3 py-2 text-xs gap-3">
+                      <span className="text-slate-600 font-semibold">{item.label}</span>
+                      <span className="font-mono font-bold text-slate-700 text-right shrink-0">
+                        {item.value}
+                        {item.unit != null && String(item.unit).trim() !== '' ? ` ${item.unit}` : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </KnowMore>
+          </div>
+        </div>
+      </div>
+
+      {/* Design Limitations + appendices — collapsed until needed */}
+      <div className="py-8 border-b border-slate-200">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <h3 className="text-sm font-bold text-[#123A63] tracking-tight">
+            Limitations, appendix & design passport
+          </h3>
+          <StatusBadge status={meta.overallStatus} />
+        </div>
+        <p className="text-[12px] text-slate-600 max-w-3xl mb-2">
+          Site conditions, local code, and a qualified electrician’s commissioning take precedence over this
+          recommendation.
+        </p>
+        <KnowMore
+          id="know-limitations"
+          title="Design limitations"
+          hint="Weather, ageing, cables, commissioning"
+        >
+          <ul className="space-y-2.5 text-sm text-slate-700 leading-relaxed max-w-3xl">
+            <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>System sizing assumes average meteorological Peak Sun Hours for the stated location.</span></li>
+            <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>Does not account for prolonged cloudy weather, atypical seasonal extremes, or microclimate shading unless separately assessed on site.</span></li>
+            <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>Loads are assumed to operate according to the entered daily runtime schedule.</span></li>
+            <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>Battery ageing over several years will reduce usable capacity; engineering reserve partially mitigates this.</span></li>
+            <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>Cable run lengths use standard residential assumptions; verify actual route lengths before procurement.</span></li>
+            <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>Final installation must be verified, commissioned, and signed off by a qualified electrician in accordance with local regulations.</span></li>
+          </ul>
+        </KnowMore>
+      </div>
+
+      {/* Appendix + passport — collapsed; still prints fully */}
+      <div className="py-8 border-b border-slate-200 page-break-before">
+        <KnowMore
+          id="know-appendix"
+          title="Appendix summary, design inputs, energy flow, and passport"
+          hint="Sections A–C and design passport checklist"
+        >
+          <div className="space-y-8">
+            <div>
+              <SectionHeading>A. Engineering Summary</SectionHeading>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { l: 'Total Connected Load', v: `${(calcs.connectedLoad / 1000).toFixed(2)} kW` },
+                  { l: 'Peak Demand', v: `${(calcs.peakLoad / 1000).toFixed(2)} kW` },
+                  { l: 'Daily Energy', v: `${(calcs.dailyEnergy / 1000).toFixed(2)} kWh` },
+                  { l: 'Recommended Inverter', v: `${calcs.inverterSizeKva} kVA ${meta.topologyLabel.split('(')[0].trim()}` },
+                  {
+                    l: 'Recommended Battery Bank',
+                    v: `${resolvedV}V ${calcs.batteryCapacityAh}Ah ${meta.chemistryLabel}`
+                  },
+                  { l: 'Recommended PV Array', v: `${calcs.solarArrayKw} kWp` },
+                  { l: 'Engineering Status', v: meta.overallStatus },
+                  { l: 'Design Confidence', v: `${meta.confidenceScore}%` }
+                ].map(item => (
+                  <div key={item.l} className="p-4 rounded-xl border border-slate-200 bg-[#F7FAFC]">
+                    <FieldLabel>{item.l}</FieldLabel>
+                    <p className="text-base font-extrabold text-slate-900 mt-1.5">{item.v}</p>
                   </div>
                 ))}
               </div>
             </div>
+
+            <div>
+              <SectionHeading>B. Design Inputs</SectionHeading>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-1 bg-[#F7FAFC] border border-slate-200 rounded-2xl p-5 md:p-6">
+                <DotRow label="Backup Time" value={`${backupHours} Hours`} />
+                <DotRow
+                  label="System Operating Mode"
+                  value={
+                    calcs.operatingMode === 'hybrid_essentials'
+                      ? 'Hybrid Night Essentials'
+                      : 'Full Home Backup'
+                  }
+                />
+                <DotRow label="Battery Chemistry" value={meta.chemistryLabel} />
+                <DotRow
+                  label="Nominal System Voltage"
+                  value={systemVoltage === 'auto' ? `${resolvedV}V (Auto-Resolved)` : systemVoltage}
+                />
+                <DotRow label="Installation Type" value={meta.installationTypeLabel} />
+                <DotRow label="Selected Inverter Topology" value={meta.topologyLabel} />
+                <DotRow label="Peak Sun Hours Used" value={`${calcs.peakSunHoursUsed ?? 4.5} hrs`} />
+                <DotRow label="Safety Margin" value={`${meta.safetyMarginPercent}%`} />
+                <DotRow label="Future Expansion" value={`${meta.futureExpansionPercent}%`} />
+                <DotRow label="Cold Design Ambient" value={`${meta.ambientColdC} °C`} />
+                <DotRow label="Hot Cell Temperature" value={`${meta.ambientHotC} °C`} />
+                <DotRow label="Preferred Panel Wattage" value={`${panelSize} watts-peak (Wp)`} />
+                <DotRow label="Selected Panel Wattage" value={`${meta.selectedPanelWattageWp} watts-peak (Wp)`} />
+                <DotRow label="Panel Preference Note" value={meta.panelPreferenceNote} />
+                <DotRow label="Installed Battery Reserve" value={`${meta.installedBatteryReservePercent}%`} />
+                <DotRow label="Usable Battery Reserve" value={`${meta.usableBatteryReservePercent}%`} />
+                <DotRow label="Project Classification" value={projectType === 'commercial' ? 'Commercial' : 'Residential'} />
+              </div>
+            </div>
+
+            <div>
+              <SectionHeading>C. Energy Flow Summary</SectionHeading>
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                {[
+                  { l: 'PV Generation', v: `${meta.energyFlow.pvGenerationKwh} kWh/day` },
+                  { l: 'System Losses', v: `${meta.energyFlow.systemLossesKwh} kWh/day` },
+                  { l: 'Net Energy Available', v: `${meta.energyFlow.netEnergyAvailableKwh} kWh/day` },
+                  { l: 'Customer Daily Consumption', v: `${meta.energyFlow.customerConsumptionKwh} kWh/day` },
+                  { l: 'Remaining Energy Reserve', v: `${meta.energyFlow.remainingReserveKwh} kWh/day` }
+                ].map((row, i) => (
+                  <div key={row.l} className="relative p-4 rounded-xl bg-[#F7FAFC] border border-slate-200">
+                    {i < 4 && (
+                      <span className="hidden md:block absolute -right-2.5 top-1/2 -translate-y-1/2 z-10 text-[#156DB7] font-black text-sm">
+                        →
+                      </span>
+                    )}
+                    <FieldLabel>{row.l}</FieldLabel>
+                    <p className="text-sm font-extrabold text-slate-900 mt-2">{row.v}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="text-sm text-slate-600 mt-4 leading-relaxed max-w-3xl">
+                Net energy available already includes thermal, soiling, cable, inverter, and battery round-trip losses.
+              </p>
+            </div>
+
+            <div>
+              <SectionHeading icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}>
+                14. Design Passport
+              </SectionHeading>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-w-2xl">
+                {meta.passport.map(item => (
+                  <div key={item.label} className="flex justify-between items-center px-4 py-3 rounded-xl border border-slate-200 bg-[#F7FAFC] text-sm">
+                    <span className="font-semibold text-slate-800">{item.label}</span>
+                    <StatusBadge status={item.status} />
+                  </div>
+                ))}
+                <div className="sm:col-span-2 flex justify-between items-center px-4 py-3.5 rounded-xl border border-emerald-200 bg-emerald-50 text-sm mt-1">
+                  <span className="font-bold text-slate-900">Overall Engineering Status</span>
+                  <StatusBadge status={meta.overallStatus} />
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-
-      {/* Design Limitations */}
-      <div className="py-8 border-b border-slate-200">
-        <SectionHeading>13. Design Limitations</SectionHeading>
-        <ul className="space-y-2.5 text-sm text-slate-700 leading-relaxed max-w-3xl">
-          <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>System sizing assumes average meteorological Peak Sun Hours for the stated location.</span></li>
-          <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>Does not account for prolonged cloudy weather, atypical seasonal extremes, or microclimate shading unless separately assessed on site.</span></li>
-          <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>Loads are assumed to operate according to the entered daily runtime schedule.</span></li>
-          <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>Battery ageing over several years will reduce usable capacity; engineering reserve partially mitigates this.</span></li>
-          <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>Cable run lengths use standard residential assumptions; verify actual route lengths before procurement.</span></li>
-          <li className="flex gap-2"><span className="text-[#156DB7] font-bold">•</span><span>Final installation must be verified, commissioned, and signed off by a qualified electrician in accordance with local regulations.</span></li>
-        </ul>
-      </div>
-
-      {/* Appendix: Engineering Summary */}
-      <div className="py-8 border-b border-slate-200 page-break-before">
-        <SectionHeading>A. Engineering Summary</SectionHeading>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[
-            { l: 'Total Connected Load', v: `${(calcs.connectedLoad / 1000).toFixed(2)} kW` },
-            { l: 'Peak Demand', v: `${(calcs.peakLoad / 1000).toFixed(2)} kW` },
-            { l: 'Daily Energy', v: `${(calcs.dailyEnergy / 1000).toFixed(2)} kWh` },
-            { l: 'Recommended Inverter', v: `${calcs.inverterSizeKva} kVA ${meta.topologyLabel.split('(')[0].trim()}` },
-            {
-              l: 'Recommended Battery Bank',
-              v: `${resolvedV}V ${calcs.batteryCapacityAh}Ah ${meta.chemistryLabel}`
-            },
-            { l: 'Recommended PV Array', v: `${calcs.solarArrayKw} kWp` },
-            { l: 'Engineering Status', v: meta.overallStatus },
-            { l: 'Design Confidence', v: `${meta.confidenceScore}%` }
-          ].map(item => (
-            <div key={item.l} className="p-4 rounded-xl border border-slate-200 bg-[#F7FAFC]">
-              <FieldLabel>{item.l}</FieldLabel>
-              <p className="text-base font-extrabold text-slate-900 mt-1.5">{item.v}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Appendix: Design Inputs */}
-      <div className="py-8 border-b border-slate-200">
-        <SectionHeading>B. Design Inputs</SectionHeading>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-1 bg-[#F7FAFC] border border-slate-200 rounded-2xl p-5 md:p-6">
-          <DotRow label="Backup Time" value={`${backupHours} Hours`} />
-          <DotRow
-            label="System Operating Mode"
-            value={
-              calcs.operatingMode === 'hybrid_essentials'
-                ? 'Hybrid Night Essentials'
-                : 'Full Home Backup'
-            }
-          />
-          <DotRow label="Battery Chemistry" value={meta.chemistryLabel} />
-          <DotRow
-            label="Nominal System Voltage"
-            value={systemVoltage === 'auto' ? `${resolvedV}V (Auto-Resolved)` : systemVoltage}
-          />
-          <DotRow label="Installation Type" value={meta.installationTypeLabel} />
-          <DotRow label="Selected Inverter Topology" value={meta.topologyLabel} />
-          <DotRow label="Peak Sun Hours Used" value={`${calcs.peakSunHoursUsed ?? 4.5} hrs`} />
-          <DotRow label="Safety Margin" value={`${meta.safetyMarginPercent}%`} />
-          <DotRow label="Future Expansion" value={`${meta.futureExpansionPercent}%`} />
-          <DotRow label="Cold Design Ambient" value={`${meta.ambientColdC} °C`} />
-          <DotRow label="Hot Cell Temperature" value={`${meta.ambientHotC} °C`} />
-          <DotRow label="Preferred Panel Wattage" value={`${panelSize} watts-peak (Wp)`} />
-          <DotRow label="Selected Panel Wattage" value={`${meta.selectedPanelWattageWp} watts-peak (Wp)`} />
-          <DotRow label="Panel Preference Note" value={meta.panelPreferenceNote} />
-          <DotRow label="Installed Battery Reserve" value={`${meta.installedBatteryReservePercent}%`} />
-          <DotRow label="Usable Battery Reserve" value={`${meta.usableBatteryReservePercent}%`} />
-          <DotRow label="Project Classification" value={projectType === 'commercial' ? 'Commercial' : 'Residential'} />
-        </div>
-      </div>
-
-      {/* Appendix: Energy Flow */}
-      <div className="py-8 border-b border-slate-200">
-        <SectionHeading>C. Energy Flow Summary</SectionHeading>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-          {[
-            { l: 'PV Generation', v: `${meta.energyFlow.pvGenerationKwh} kWh/day` },
-            { l: 'System Losses', v: `${meta.energyFlow.systemLossesKwh} kWh/day` },
-            { l: 'Net Energy Available', v: `${meta.energyFlow.netEnergyAvailableKwh} kWh/day` },
-            { l: 'Customer Daily Consumption', v: `${meta.energyFlow.customerConsumptionKwh} kWh/day` },
-            { l: 'Remaining Energy Reserve', v: `${meta.energyFlow.remainingReserveKwh} kWh/day` }
-          ].map((row, i) => (
-            <div key={row.l} className="relative p-4 rounded-xl bg-[#F7FAFC] border border-slate-200">
-              {i < 4 && (
-                <span className="hidden md:block absolute -right-2.5 top-1/2 -translate-y-1/2 z-10 text-[#156DB7] font-black text-sm">
-                  →
-                </span>
-              )}
-              <FieldLabel>{row.l}</FieldLabel>
-              <p className="text-sm font-extrabold text-slate-900 mt-2">{row.v}</p>
-            </div>
-          ))}
-        </div>
-        <p className="text-sm text-slate-600 mt-4 leading-relaxed max-w-3xl">
-          Net energy available already includes thermal, soiling, cable, inverter, and battery round-trip losses.
-          A positive remaining reserve indicates the PV array can support daily consumption with recovery margin.
-        </p>
-      </div>
-
-      {/* Design Passport */}
-      <div className="py-8 border-b border-slate-200">
-        <SectionHeading icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}>
-          14. Design Passport
-        </SectionHeading>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-w-2xl">
-          {meta.passport.map(item => (
-            <div key={item.label} className="flex justify-between items-center px-4 py-3 rounded-xl border border-slate-200 bg-[#F7FAFC] text-sm">
-              <span className="font-semibold text-slate-800">{item.label}</span>
-              <StatusBadge status={item.status} />
-            </div>
-          ))}
-          <div className="sm:col-span-2 flex justify-between items-center px-4 py-3.5 rounded-xl border border-emerald-200 bg-emerald-50 text-sm mt-1">
-            <span className="font-bold text-slate-900">Overall Engineering Status</span>
-            <StatusBadge status={meta.overallStatus} />
-          </div>
-        </div>
+        </KnowMore>
       </div>
       </>
       )}
